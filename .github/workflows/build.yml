@@ -47,10 +47,13 @@ jobs:
             cp -R "$ART/AU/Voice Fucker.component" out/
             cp -R "$ART/Standalone/Voice Fucker.app" out/
             codesign --force --deep -s - "out/Voice Fucker.vst3" "out/Voice Fucker.component" "out/Voice Fucker.app" || true
+            cp "Installer/Install Voice Fucker.command" out/
+            chmod +x "out/Install Voice Fucker.command"
           else
             cp "$ART/Standalone/Voice Fucker.exe" out/
+            cp "Installer/Install Voice Fucker.bat" out/
           fi
-          cp INSTALL.txt out/
+          cp "Installer/HOW TO INSTALL.txt" out/
           cd out
           if [ "$RUNNER_OS" == "macOS" ]; then
             ditto -c -k --keepParent . "../VoiceFucker-macOS.zip"

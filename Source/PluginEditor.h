@@ -1,127 +1,141 @@
 #pragma once
 #include "PluginProcessor.h"
-#include "UI.h"
-
-class VoiceFuckerEditor;
+#include "Components.h"
 
 //==============================================================================
-// Bulging CRT screen: live waveform or vocoder band spectrum
-class CrtScreen : public juce::Component, private juce::Timer
+// On/off button of one harmony interval
+class ChipButton : public juce::ToggleButton
 {
 public:
-    explicit CrtScreen (VoiceFuckerProcessor&);
-    ~CrtScreen() override { stopTimer(); }
-    void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-private:
-    void timerCallback() override;
-    juce::Point<float> bulge (float x, float y) const;
-    juce::Path glassPath (juce::Rectangle<float>) const;
-    juce::String noteText() const;
-    VoiceFuckerProcessor& proc;
-    std::array<float, VoiceFuckerProcessor::maxBands> spec {}, hold {};
-    std::vector<float> snap;
-    juce::Rectangle<float> glass, toggleArea;
+    ChipButton() { setWantsKeyboardFocus (false); setClickingTogglesState (true); }
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    juce::String shown;      // interval that really sounds
+    bool moved = false;      // the scale moved it
 };
 
-//==============================================================================
-class LevelMeter : public juce::Component, private juce::Timer
+// The mixer part of Harmonize: dB readouts, faders, interval buttons and stereo dots
+class HarmStrips : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
-    LevelMeter (VoiceFuckerProcessor&, bool isInput);
-    ~LevelMeter() override { stopTimer(); }
-    void paint (juce::Graphics&) override;
-private:
-    void timerCallback() override;
-    VoiceFuckerProcessor& proc;
-    bool input;
-    float level[2] {}, peakHold = -100.f;
-    int holdFrames = 0;
-};
-
-//==============================================================================
-class PresetBar : public juce::Component, private juce::Timer
-{
-public:
-    explicit PresetBar (VoiceFuckerProcessor&);
-    ~PresetBar() override { stopTimer(); }
-    void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-private:
-    void timerCallback() override;
-    void step (int dir);
-    void showMenu();
-    void savePreset();
-    struct Entry { juce::String name; int factory = -1; juce::File file; };
-    juce::Array<Entry> entries() const;
-    VoiceFuckerProcessor& proc;
-    juce::String shown;
-    bool dirtyShown = false;
-    std::unique_ptr<juce::AlertWindow> saveWindow;
-};
-
-//==============================================================================
-class HarmPanel : public juce::Component, private juce::Timer
-{
-public:
-    explicit HarmPanel (VoiceFuckerProcessor&);
-    ~HarmPanel() override { stopTimer(); }
+    explicit HarmStrips (VoiceFuckerProcessor&);
+    ~HarmStrips() override { stopTimer(); }
     void paint (juce::Graphics&) override;
     void resized() override;
-    static constexpr int stripX0 = 40, stripStep = 54;
-private:
-    void timerCallback() override;
-    float panFor (int i) const;
-    VoiceFuckerProcessor& proc;
-    juce::OwnedArray<ui::Chip> chips;
-    juce::OwnedArray<ui::Fader> faders;
-    std::unique_ptr<ui::PowerButton> power;
-    std::unique_ptr<ui::Led> scaleLed;
-    std::unique_ptr<ui::Combo> key;
-    std::unique_ptr<ui::Segmented> pan;
-    std::unique_ptr<ui::Knob> level, detune, spread;
-    juce::int64 lastHash = 0;
-};
-
-//==============================================================================
-class MainPanel : public juce::Component, private juce::Timer
-{
-public:
-    explicit MainPanel (VoiceFuckerProcessor&, VoiceFuckerEditor&);
-    ~MainPanel() override { stopTimer(); }
-    void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
-    static constexpr int W = 870, H = 850;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void setHelp (bool on, Help::Lang);
+
+    static constexpr int stripX0 = 30, stripStep = 62, panY = 146;
+
 private:
     void timerCallback() override;
-    struct Module { juce::String title; juce::Rectangle<int> r; juce::String onParam; juce::Array<juce::Component*> items; };
-    ui::Knob* knob (const juce::String& id, const juce::String& label, float cx, float cy, Module* m = nullptr);
-    void showSettings();
+    int stripAt (juce::Point<int>) const;
+    float effectivePan (int i) const;
 
     VoiceFuckerProcessor& proc;
-    VoiceFuckerEditor& editor;
-    juce::Image asphalt;
-    juce::OwnedArray<juce::Component> owned;
-    std::vector<Module> modules;
-    CrtScreen screen;
-    LevelMeter inMeter, outMeter;
-    PresetBar presets;
-    HarmPanel harm;
-    juce::Rectangle<int> gearArea;
+    juce::OwnedArray<juce::Slider> faders;
+    juce::OwnedArray<ChipButton> chips;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> faderAtt;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> chipAtt;
+    int dragging = -1;
+    float flicker = 0.0f;
+    bool helpOn = true;
+    Help::Lang lang = Help::Lang::en;
 };
 
 //==============================================================================
-class VoiceFuckerEditor : public juce::AudioProcessorEditor
+class VoiceFuckerEditor : public juce::AudioProcessorEditor,
+                          private juce::Timer
 {
 public:
     explicit VoiceFuckerEditor (VoiceFuckerProcessor&);
     ~VoiceFuckerEditor() override;
-    void paint (juce::Graphics&) override;
+
     void resized() override;
-    void setScale (float s);
+    void paint (juce::Graphics&) override {}
+
+    static constexpr int baseW = 1160, baseH = 850;
+
+    static juce::String loadSetting (const juce::String& key, const juce::String& fallback);
+    static void saveSetting (const juce::String& key, const juce::String& value);
+
+    // For tests and screenshots
+    void setThemeByName (const juce::String& name) { applyTheme (Theme::byName (name), false); }
+    ScopeView& getScope() { return scope; }
+    void startTour (int step) { tour.start (lang); tour.showStep (step); }
+    void showWelcome() { welcome.setVisible (true); welcome.toFront (false); }
+    void hideOverlays() { welcome.setVisible (false); tour.setVisible (false); }
+    void touchCeiling() { scope.touchCeiling (true); }
+
 private:
+    class Content : public juce::Component
+    {
+    public:
+        explicit Content (VoiceFuckerEditor& e) : editor (e) {}
+        void paint (juce::Graphics& g) override { editor.paintContent (g); }
+        void mouseDown (const juce::MouseEvent& e) override;
+    private:
+        VoiceFuckerEditor& editor;
+    };
+
+    void timerCallback() override;
+    void paintContent (juce::Graphics&);
+    void applyTheme (const Theme&, bool remember);
+    void applyHelp();
+    void setScale (float scale, bool remember);
+    void showSettingsMenu();
+    void buildBackground();
+    void addCombo (juce::Component& parent, juce::ComboBox&, const char* paramId, const juce::StringArray& items,
+                   std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>&);
+    juce::Rectangle<float> tourTarget (const juce::String& name);
+    void quickPan (bool fan);
+
     VoiceFuckerProcessor& proc;
-    ui::Look look;
-    MainPanel content;
+    VFLookAndFeel laf;                // first, so it outlives every component
+    const Theme* theme = nullptr;
+    Content content { *this };
+    juce::Image background;
+    float scale = 1.0f;
+    bool helpOn = true;
+    Help::Lang lang = Help::Lang::en;
+    std::unique_ptr<juce::TooltipWindow> tooltipWindow;
+
+    PresetBar presetBar { proc };
+    IconButton gear { IconButton::Icon::gear };
+    ScopeView scope { proc };
+    MeterColumn inCol { "IN", proc.apvts, ParamIDs::input, "Input" };
+    MeterColumn outCol { "OUT", proc.apvts, ParamIDs::output, "Output" };
+
+    Block carrierBlock { "CARRIER", proc.apvts, nullptr, false };
+    Block vocBlock     { "VOCODER", proc.apvts, ParamIDs::vocOn, false };
+    Block harmBlock    { "HARMONIZE", proc.apvts, ParamIDs::harmOn, false };
+    Block dirtBlock    { "DIRT", proc.apvts, ParamIDs::dirtOn, false };
+    Block compBlock    { "COMP", proc.apvts, ParamIDs::compOn, false };
+    Block widthBlock   { "WIDTH", proc.apvts, ParamIDs::widthOn, false };
+    Block mixBlock     { "MIX", proc.apvts, nullptr, false };
+    Block clipBlock    { "CLIP", proc.apvts, ParamIDs::clipOn, false };
+
+    juce::ComboBox sourceBox, rootBox, scaleBox, dirtModeBox, compModeBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> sourceAtt, rootAtt, scaleAtt, dirtModeAtt, compModeAtt;
+    std::unique_ptr<Segmented> pitchSeg, panSeg, widthSeg, clipMode;
+    juce::ToggleButton scaleButton { "Scale" }, autoGainButton { "Auto gain" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> scaleAtt2, autoGainAtt;
+    juce::TextButton altButton { "Alt" }, fanButton { "Fan" };
+    HarmStrips strips { proc };
+
+    Knob note, glide, detune, spread, noise;
+    Knob bands, formant, attack, release, sib, gate;
+    Knob harmLevel, harmDetune, harmSpread;
+    Knob drive, crunch, destroy;
+    Knob ottDepth, ottTime, ottUp, ottDown, glueThresh, glueRatio, glueAttack, glueRelease, compMix;
+    Knob width, mono, mix, ceiling;
+
+    AboutOverlay about;
+    TourOverlay tour;
+    WelcomePrompt welcome;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoiceFuckerEditor)
 };

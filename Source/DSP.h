@@ -80,14 +80,17 @@ namespace vf
     }
 
     // ---------------------------------------------------------------- saturation shapes
-    // mode: 0 tube (warm, asymmetric), 1 hard (aggressive), 2 fold (wavefolder)
+    // 0 Soft, 1 Tape, 2 Tube, 3 Fuzz, 4 Hard, 5 Fold
     inline float shape (int mode, float x) noexcept
     {
         switch (mode)
         {
-            case 0:  return std::tanh (x + 0.25f) - 0.24491866f;                 // tanh(0.25)
-            case 1:  { const float a = std::abs (x); return a < 1.f ? x * (1.5f - 0.5f * a * a) : (x > 0 ? 1.f : -1.f); }
-            default: return std::sin (x * 1.3f) * (1.f / 1.3f) * (1.f + 0.15f * std::min (std::abs (x), 6.f)) / 1.9f;
+            case 0:  return std::tanh (x);
+            case 1:  return std::tanh (x * 0.8f) * 1.1f;
+            case 2:  return std::tanh (x + 0.35f) - 0.33637554f;                 // tanh(0.35)
+            case 3:  { const float a = x * 1.5f; return a > 0.f ? 1.f - std::exp (-a) : -0.7f * (1.f - std::exp (a / 0.7f)); }
+            case 4:  return x > 1.f ? 1.f : (x < -1.f ? -1.f : x);
+            default: return std::sin (1.5707963f * x);
         }
     }
 
@@ -110,6 +113,42 @@ namespace vf
             const float a = buf[(size_t) (i0 & mask)], b = buf[(size_t) ((i0 + 1) & mask)];
             return a + (b - a) * fr;
         }
+    };
+
+    // ---------------------------------------------------------------- pitch shifter (two crossfaded delay taps)
+    // Shifts a mono signal by 'ratio'. The window follows the voice period so the grains line up.
+    class PitchShifter
+    {
+    public:
+        void prepare (double sampleRate)
+        {
+            sr = (float) sampleRate;
+            line.prepare ((int) (sampleRate * 0.25));
+            for (auto& v : phase) v = 0.f;
+            window = 0.04f * sr;
+        }
+        void reset() { line.reset(); for (auto& v : phase) v = 0.f; }
+        void setWindowFromPeriod (float periodSeconds)   // call once per block
+        {
+            const float target = juce_clamp (periodSeconds * 3.f, 0.022f, 0.07f) * sr;
+            window += (target - window) * 0.2f;
+        }
+        inline void push (float x) noexcept { line.push (x); }
+        // voice index selects an independent grain phase
+        inline float read (int voice, float ratio) noexcept
+        {
+            float& ph = phase[voice];
+            ph += (1.f - ratio) / window;
+            ph -= std::floor (ph);
+            float p2 = ph + 0.5f; if (p2 >= 1.f) p2 -= 1.f;
+            const float w1 = std::sin (pi * ph), w2 = std::sin (pi * p2);
+            return line.read (2.f + ph * window) * w1 * w1 + line.read (2.f + p2 * window) * w2 * w2;
+        }
+    private:
+        static float juce_clamp (float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+        DelayLine line;
+        float phase[16] {};
+        float sr = 44100.f, window = 1764.f;
     };
 
     // ---------------------------------------------------------------- YIN pitch detector on a decimated signal

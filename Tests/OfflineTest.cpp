@@ -85,10 +85,16 @@ int main (int argc, char** argv)
         { "clean_robot", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_on", 0); setP (p, "width_on", 0); setP (p, "autogain", 0); }, false },
         { "fixed_note", [] (VoiceFuckerProcessor& p) { setP (p, "car_pitch", 2); }, false },
         { "midi_chord", [] (VoiceFuckerProcessor& p) { setP (p, "car_pitch", 0); }, true },
-        { "harm_spectral_100", [] (VoiceFuckerProcessor& p) { setP (p, "voc_bands", 100); setP (p, "harm_pan", 2);
-                                   for (int i = 0; i < 9; ++i) setP (p, Params::ivOn (i), 1); }, false },
-        { "harm_fan", [] (VoiceFuckerProcessor& p) { setP (p, Params::ivOn (1), 1); setP (p, Params::ivOn (7), 1); setP (p, Params::ivOn (0), 1); }, false },
-        { "crunch_max", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_crunch", 100); setP (p, "dirt_drive", 100); setP (p, "dirt_destroy", 70); setP (p, "dirt_mode", 2); }, false },
+        { "harm_spectral_100", [] (VoiceFuckerProcessor& p) { setP (p, "voc_bands", 100); setP (p, "harm_pan", 1);
+                                   for (int i = 0; i < 9; ++i) setP (p, ParamIDs::ivOn (i), 1); }, false },
+        { "harm_fan", [] (VoiceFuckerProcessor& p) { setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); setP (p, ParamIDs::ivOn (0), 1); }, false },
+        { "crunch_max", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_crunch", 100); setP (p, "dirt_drive", 100); setP (p, "dirt_destroy", 70); setP (p, "dirt_mode", 5); }, false },
+        { "fuzz", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_crunch", 80); setP (p, "dirt_mode", 3); }, false },
+        { "ott", [] (VoiceFuckerProcessor& p) { setP (p, "comp_on", 1); setP (p, "ott_depth", 100); }, false },
+        { "glue", [] (VoiceFuckerProcessor& p) { setP (p, "comp_on", 1); setP (p, "comp_mode", 1); setP (p, "glue_thresh", -30); }, false },
+        { "pre_post_eq", [] (VoiceFuckerProcessor& p) { setP (p, "pre_on", 1); setP (p, "pre_lc", 300); setP (p, "post_on", 1); setP (p, "post_hc", 2000); setP (p, "mix", 50); }, false },
+        { "voc_off_harm", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); setP (p, ParamIDs::ivOn (0), 1); setP (p, "dirt_crunch", 0); setP (p, "dirt_drive", 0); }, false },
+        { "gate_high", [] (VoiceFuckerProcessor& p) { setP (p, "voc_gate", -20); }, false },
         { "vocoder_off", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, "dirt_crunch", 60); }, false },
         { "noise_carrier", [] (VoiceFuckerProcessor& p) { setP (p, "car_src", 3); }, false },
         { "haas_chorus", [] (VoiceFuckerProcessor& p) { setP (p, "width_mode", 1); setP (p, "width_amt", 100); }, false },
@@ -96,8 +102,8 @@ int main (int argc, char** argv)
         { "formant_down", [] (VoiceFuckerProcessor& p) { setP (p, "voc_formant", -12); }, false },
         { "formant_up", [] (VoiceFuckerProcessor& p) { setP (p, "voc_formant", 12); }, false },
     };
-    for (int fp = 1; fp < 8; ++fp)
-        cases.push_back ({ "preset_" + juce::String (fp), [fp] (VoiceFuckerProcessor& p) { p.loadFactoryPreset (fp); }, false });
+    for (int fp = 0; fp < PresetManager::getFactoryNames().size(); ++fp)
+        cases.push_back ({ "preset_" + juce::String (fp), [fp] (VoiceFuckerProcessor& p) { p.presets.loadFactory (fp); }, false });
 
     bool ok = true;
     for (auto& c : cases)
@@ -166,42 +172,53 @@ int main (int argc, char** argv)
     // state round trip
     {
         VoiceFuckerProcessor a, b;
-        a.loadFactoryPreset (3);
+        a.presets.loadFactory (2);
         juce::MemoryBlock mb; a.getStateInformation (mb);
         b.setStateInformation (mb.getData(), (int) mb.getSize());
-        const bool same = b.getPresetName() == a.getPresetName()
+        const bool same = b.presets.getCurrentName() == a.presets.getCurrentName()
                           && std::abs (b.apvts.getRawParameterValue ("dirt_crunch")->load() - a.apvts.getRawParameterValue ("dirt_crunch")->load()) < 0.01f;
         std::printf ("state round trip: %s\n", same ? "ok" : "FAILED");
         ok = ok && same;
     }
 
-    // editor screenshot
+    // editor screenshots
     {
         VoiceFuckerProcessor p;
         p.setPlayConfigDetails (2, 2, sr, block);
         p.prepareToPlay (sr, block);
-        setP (p, Params::ivOn (1), 1); setP (p, Params::ivOn (7), 1); setP (p, Params::ivOn (0), 1);
+        setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); setP (p, ParamIDs::ivOn (0), 1); setP (p, "comp_on", 1);
+        setP (p, "pre_on", 1); setP (p, "pre_lc", 150);
         juce::AudioBuffer<float> buf (4, block);
-        for (int pos = 0; pos < (int) (sr * 0.7); pos += block)
+        auto feed = [&] (int blocks, int start)
         {
-            buf.clear();
-            for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, pos + (int) sr, block);
-            juce::MidiBuffer m; p.processBlock (buf, m);
-        }
-        for (int mode = 0; mode < 2; ++mode)
-        {
-            p.screenMode = mode;
-            std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
-            for (int i = 0; i < 6; ++i)
+            for (int k = 0; k < blocks; ++k)
             {
                 buf.clear();
-                for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, (int) sr + i * block, block);
+                for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, start + (k * block) % (int) (sr * 4), block);
                 juce::MidiBuffer m; p.processBlock (buf, m);
-                juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
             }
-            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
+        };
+        feed ((int) (sr * 1.5) / block, (int) sr);
+        struct Shot { const char* name; const char* theme; int view; int tour; bool ceiling; };
+        const Shot shots[] = { { "ui_wave", "Asphalt", 0, -1, false }, { "ui_spectrum", "Asphalt", 1, -1, false }, { "ui_eq", "Asphalt", 2, -1, false },
+                               { "ui_ceiling", "Asphalt", 0, -1, true }, { "ui_mango", "Mango", 1, -1, false }, { "ui_luxe", "Luxe", 0, -1, false },
+                               { "ui_rage", "Rage", 0, -1, false }, { "ui_ultra", "Ultraviolet", 1, -1, false }, { "ui_tour", "Asphalt", 0, 10, false },
+                               { "ui_welcome", "Asphalt", 0, -2, false } };
+        for (auto& sh : shots)
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
+            auto* ed = dynamic_cast<VoiceFuckerEditor*> (base.get());
+            ed->setSize (VoiceFuckerEditor::baseW, VoiceFuckerEditor::baseH);
+            ed->hideOverlays();
+            ed->setThemeByName (sh.theme);
+            ed->getScope().setView ((ScopeView::View) sh.view);
+            if (sh.tour >= 0) ed->startTour (sh.tour);
+            if (sh.tour == -2) ed->showWelcome();
+            if (sh.ceiling) ed->touchCeiling();
+            for (int i = 0; i < 8; ++i) { feed (6, (int) sr + i * block * 6); ed->getScope().advanceFrames (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); }
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
             juce::PNGImageFormat png;
-            auto f = outDir.getChildFile (mode == 0 ? "ui_wave.png" : "ui_spectrum.png");
+            auto f = outDir.getChildFile (juce::String (sh.name) + ".png");
             f.deleteFile();
             juce::FileOutputStream os (f);
             png.writeImageToStream (img, os);

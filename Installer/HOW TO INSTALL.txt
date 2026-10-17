@@ -1,0 +1,63 @@
+VOICE FUCKER 2.0 by Primal Rage Lab
+===================================
+
+---------------------------------------------------------------
+РУССКИЙ
+---------------------------------------------------------------
+
+WINDOWS
+ 1. Распакуй архив.
+ 2. Дважды кликни "Install Voice Fucker.bat" и разреши доступ администратора.
+    (Или вручную: скопируй папку "Voice Fucker.vst3" в C:\Program Files\Common Files\VST3)
+ 3. Пересканируй плагины в DAW.
+ "Voice Fucker.exe" - отдельная программа, работает без DAW.
+
+MAC
+ 1. Распакуй архив.
+ 2. Нажми ПРАВОЙ кнопкой на "Install Voice Fucker.command" -> "Открыть" -> "Открыть".
+    Если macOS всё равно не пускает: Системные настройки -> Конфиденциальность и безопасность ->
+    внизу "Всё равно открыть" рядом с Install Voice Fucker.command. Это нужно один раз.
+ 3. Установщик сам положит VST3 и AU в нужные папки и снимет блокировку macOS.
+ 4. Пересканируй плагины в DAW. В Logic плагин находится в "MIDI-controlled Effects".
+
+ Если у тебя есть приложение Permissions Reset - можно просто закинуть в него
+ "Voice Fucker.vst3" и "Voice Fucker.component" после копирования в папки:
+   ~/Library/Audio/Plug-Ins/VST3
+   ~/Library/Audio/Plug-Ins/Components
+
+ Запасной вариант через Терминал (скопируй и вставь две строки):
+   xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Voice Fucker.vst3"
+   xattr -cr ~/Library/Audio/Plug-Ins/Components/"Voice Fucker.component"
+
+КАК ПОДАВАТЬ СИГНАЛ
+ - Плагин ставится на дорожку с вокалом.
+ - Pitch = Auto: ничего не нужно, робот поёт твою мелодию.
+ - Pitch = MIDI: в Bitwig поставь перед плагином Note Receiver и выбери дорожку с нотами.
+   В Ableton на MIDI-дорожке в "MIDI To" выбери дорожку с вокалом / Voice Fucker.
+ - Source = Sidechain: заведи синт во вход сайдчейна плагина
+   (в Bitwig - выбор сайдчейна в заголовке плагина).
+
+---------------------------------------------------------------
+ENGLISH
+---------------------------------------------------------------
+
+WINDOWS
+ 1. Unzip.
+ 2. Double-click "Install Voice Fucker.bat" and allow admin rights.
+    (Or copy the "Voice Fucker.vst3" folder to C:\Program Files\Common Files\VST3 yourself.)
+ 3. Rescan plugins in your DAW. "Voice Fucker.exe" is the standalone app.
+
+MAC
+ 1. Unzip.
+ 2. RIGHT-click "Install Voice Fucker.command" -> Open -> Open.
+    If macOS still blocks it: System Settings -> Privacy & Security -> "Open Anyway". Only once.
+ 3. The installer copies VST3 and AU and removes the macOS quarantine.
+ 4. Rescan plugins in your DAW. In Logic it is under "MIDI-controlled Effects".
+ Terminal fallback:
+   xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Voice Fucker.vst3"
+   xattr -cr ~/Library/Audio/Plug-Ins/Components/"Voice Fucker.component"
+
+FEEDING IT
+ - Put it on your vocal track. Pitch = Auto needs nothing.
+ - Pitch = MIDI: Bitwig - Note Receiver before the plugin. Ableton - "MIDI To" on the MIDI track.
+ - Source = Sidechain: route a synth into the plugin's sidechain input.

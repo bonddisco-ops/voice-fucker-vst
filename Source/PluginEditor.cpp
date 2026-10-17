@@ -1,793 +1,792 @@
 #include "PluginEditor.h"
+#include "Logo.h"
 
-using namespace ui;
+using namespace juce;
 
 namespace
 {
-    float toDb (float g) { return 20.f * std::log10 (std::max (g, 1.0e-6f)); }
+    constexpr int X0 = 96, X1 = 1064;
+    constexpr int scopeY = 80, scopeH = 224;
+    constexpr int row1Y = 312, row1H = 170, carrierW = 428, vocW = 508;
+    constexpr int harmY = 490, harmH = 190;
+    constexpr int row3Y = 688, row3H = 152;
+    constexpr int dirtW = 196, compW = 312, widthW = 196, mixW = 102, clipW = 102;
+    constexpr int row3Gap = (X1 - X0 - (dirtW + compW + widthW + mixW + clipW)) / 4;
+    const Rectangle<int> logoArea (96, 10, 58, 60);
+    const Rectangle<int> titleArea (96, 10, 360, 60);
+    bool askedThisRun = false;
 
-    void drawChevron (juce::Graphics& g, float cx, float cy, bool left, juce::Colour c)
+    PropertiesFile::Options settingsOptions()
     {
-        juce::Path p;
-        const float d = left ? 1.f : -1.f;
-        p.startNewSubPath (cx + 2.5f * d, cy - 5.f); p.lineTo (cx - 2.5f * d, cy); p.lineTo (cx + 2.5f * d, cy + 5.f);
-        g.setColour (c);
-        g.strokePath (p, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        PropertiesFile::Options o;
+        o.applicationName = "Voice Fucker";
+        o.folderName = "Primal Rage Lab";
+        o.filenameSuffix = ".settings";
+        o.osxLibrarySubFolder = "Application Support";
+        o.millisecondsBeforeSaving = 0;
+        return o;
     }
 }
 
 //==============================================================================
-// CrtScreen
-//==============================================================================
-CrtScreen::CrtScreen (VoiceFuckerProcessor& p) : proc (p)
+void ChipButton::paintButton (Graphics& g, bool highlighted, bool)
 {
-    snap.resize (2048);
-    startTimerHz (40);
-}
-
-void CrtScreen::timerCallback()
-{
-    const int n = proc.numBandsUi.load();
-    for (int i = 0; i < n; ++i)
+    const auto& t = themeOf (*this);
+    const auto r = getLocalBounds().toFloat().reduced (1.0f);
+    const bool on = getToggleState();
+    if (on)
     {
-        const float v = proc.bandLevel[(size_t) i].exchange (0.f);
-        const float db = toDb (v * 2.5f);
-        const float norm = juce::jlimit (0.f, 1.f, (db + 60.f) / 58.f);
-        spec[(size_t) i] = std::max (norm, spec[(size_t) i] * 0.84f);
-        hold[(size_t) i] = std::max (spec[(size_t) i], hold[(size_t) i] - 0.008f);
+        g.setColour (t.accent.withAlpha (0.22f));
+        g.fillRoundedRectangle (r.expanded (1.0f), 7.0f);
     }
-    repaint();
-}
-
-juce::Point<float> CrtScreen::bulge (float x, float y) const
-{
-    const auto c = glass.getCentre();
-    const float u = (x - c.x) / (glass.getWidth() * 0.52f), v = (y - c.y) / (glass.getHeight() * 0.58f);
-    const float k = 1.f + 0.06f * (u * u + v * v);
-    return { c.x + (x - c.x) / k, c.y + (y - c.y) / k };
-}
-
-juce::Path CrtScreen::glassPath (juce::Rectangle<float> r) const
-{
-    const float x = r.getX(), y = r.getY(), w = r.getWidth(), h = r.getHeight(), bx = 10.f, by = 6.f;
-    juce::Path p;
-    p.startNewSubPath (x + 22, y - by);
-    p.quadraticTo (x + w / 2, y - by * 2.2f, x + w - 22, y - by);
-    p.quadraticTo (x + w + bx, y - by + 4, x + w + bx, y + 20);
-    p.quadraticTo (x + w + bx * 1.8f, y + h / 2, x + w + bx, y + h - 20);
-    p.quadraticTo (x + w + bx, y + h + by - 4, x + w - 22, y + h + by);
-    p.quadraticTo (x + w / 2, y + h + by * 2.2f, x + 22, y + h + by);
-    p.quadraticTo (x - bx, y + h + by - 4, x - bx, y + h - 20);
-    p.quadraticTo (x - bx * 1.8f, y + h / 2, x - bx, y + 20);
-    p.quadraticTo (x - bx, y - by + 4, x + 22, y - by);
-    p.closeSubPath();
-    return p;
-}
-
-juce::String CrtScreen::noteText() const
-{
-    const int mode = (int) proc.apvts.getRawParameterValue ("car_pitch")->load();
-    const int src = (int) proc.apvts.getRawParameterValue ("car_src")->load();
-    if (src == 3) return "NOISE";
-    if (src == 4) return "SIDECHAIN";
-    if (mode == 2) return "FIXED  " + Params::noteName ((int) proc.apvts.getRawParameterValue ("car_note")->load());
-    if (mode == 1)
+    g.setColour (on ? t.accent : Colour (0xff1b1b1f).brighter (highlighted ? 0.12f : 0.0f));
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (Colours::white.withAlpha (0.10f));
+    g.drawRoundedRectangle (r, 6.0f, 1.0f);
+    g.setColour (on ? Colour (0xff111114) : Colour (0xffececf0));
+    g.setFont (uiFont (13.0f, true));
+    g.drawText (shown, r, Justification::centred);
+    if (moved)
     {
-        const float hz = proc.uiAutoHz.load();
-        return hz > 0 ? "AUTO  " + Params::noteName (juce::roundToInt (vf::hzToMidi (hz))) : juce::String ("AUTO  --");
-    }
-    juce::Array<int> notes;
-    for (auto& n : proc.uiNotes) if (n.load() >= 0) notes.addIfNotAlreadyThere (n.load());
-    notes.sort();
-    juce::String s ("MIDI ");
-    if (notes.isEmpty()) return s + " --";
-    for (int i = 0; i < std::min (4, notes.size()); ++i) s << " " << Params::noteName (notes[i]);
-    if (notes.size() > 4) s << " +";
-    return s;
-}
-
-void CrtScreen::paint (juce::Graphics& g)
-{
-    auto b = getLocalBounds().toFloat();
-    // TV body
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a272b), 0, 0, juce::Colour (0xff0c0b0d), 0, b.getHeight(), false));
-    g.fillRoundedRectangle (b, 22.f);
-    g.setColour (juce::Colours::white.withAlpha (0.07f));
-    g.drawRoundedRectangle (b.reduced (0.5f), 22.f, 1.f);
-    g.setColour (juce::Colours::black.withAlpha (0.6f));
-    g.drawRoundedRectangle (b.reduced (8.f, 6.f), 18.f, 3.f);
-
-    glass = { 32.f, 16.f, b.getWidth() - 64.f, b.getHeight() - 30.f };
-    const auto gp = glassPath (glass);
-    const auto c = glass.getCentre();
-
-    {
-        juce::Graphics::ScopedSaveState ss (g);
-        g.reduceClipRegion (gp);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1b1418), c.x, c.y, juce::Colour (0xff030203), c.x + 380.f, c.y, true));
-        g.fillPath (gp);
-
-        // grid
-        g.setColour (col::pink.withAlpha (0.07f));
-        for (int i = 1; i < 8; ++i)
-        {
-            juce::Path p; const float x = glass.getX() + glass.getWidth() * (float) i / 8.f;
-            for (int j = 0; j <= 30; ++j) { auto q = bulge (x, glass.getY() + glass.getHeight() * (float) j / 30.f); j ? p.lineTo (q) : p.startNewSubPath (q); }
-            g.strokePath (p, juce::PathStrokeType (1.f));
-        }
-        for (int i = 1; i < 4; ++i)
-        {
-            juce::Path p; const float y = glass.getY() + glass.getHeight() * (float) i / 4.f;
-            for (int j = 0; j <= 50; ++j) { auto q = bulge (glass.getX() + glass.getWidth() * (float) j / 50.f, y); j ? p.lineTo (q) : p.startNewSubPath (q); }
-            g.strokePath (p, juce::PathStrokeType (1.f));
-        }
-
-        const float x0 = glass.getX() + 20.f, x1 = glass.getRight() - 20.f;
-        if (proc.screenMode == 0)
-        {
-            // waveform, triggered on a rising zero crossing
-            const int w = proc.waveWrite.load();
-            const int N = (int) snap.size();
-            for (int i = 0; i < N; ++i) snap[(size_t) i] = proc.wave[(size_t) ((w - N + i) & (VoiceFuckerProcessor::waveSize - 1))];
-            int trig = 0;
-            for (int i = N / 2 - 1; i > 1; --i) if (snap[(size_t) i - 1] < 0.f && snap[(size_t) i] >= 0.f) { trig = i; break; }
-            const int len = N / 2;
-            float pk = 0.05f;
-            for (int i = 0; i < len; ++i) pk = std::max (pk, std::abs (snap[(size_t) (trig + i)]));
-            const float gain = std::min (1.f / pk, 6.f) * 0.85f;
-            juce::Path p;
-            const int pts = 340;
-            for (int i = 0; i <= pts; ++i)
-            {
-                const int si = trig + (int) ((float) i / (float) pts * (float) (len - 1));
-                const float v = juce::jlimit (-1.f, 1.f, snap[(size_t) si] * gain);
-                auto q = bulge (x0 + (x1 - x0) * (float) i / (float) pts, c.y - v * glass.getHeight() * 0.4f);
-                i ? p.lineTo (q) : p.startNewSubPath (q);
-            }
-            g.setColour (col::pink.withAlpha (0.12f));
-            g.strokePath (p, juce::PathStrokeType (9.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (col::pink.withAlpha (0.3f));
-            g.strokePath (p, juce::PathStrokeType (4.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (juce::Colour (0xffffe0ee));
-            g.strokePath (p, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-        else
-        {
-            const int n = proc.numBandsUi.load();
-            const float bw = (x1 - x0) / (float) n;
-            const float base = glass.getBottom() - 14.f, hMax = glass.getHeight() - 34.f;
-            for (int i = 0; i < n; ++i)
-            {
-                const float h = spec[(size_t) i] * hMax;
-                const float bx = x0 + bw * (float) i;
-                auto p1 = bulge (bx + 1.f, base - h), p2 = bulge (bx + bw - 1.f, base);
-                juce::ColourGradient grad (juce::Colour (0xffffd0e4), 0, p1.y, juce::Colour (0x99781e46), 0, p2.y, false);
-                grad.addColour (0.25, col::pink);
-                g.setGradientFill (grad);
-                g.fillRect (juce::Rectangle<float> (p1, p2));
-                auto ph = bulge (bx + 1.f, base - hold[(size_t) i] * hMax);
-                g.setColour (juce::Colour (0xffffd0e4));
-                g.fillRect (ph.x, ph.y, p2.x - p1.x, 1.5f);
-            }
-            g.setColour (juce::Colours::white.withAlpha (0.45f));
-            g.setFont (font (10.f));
-            const float fLo = 90.f, fHi = 11000.f;
-            for (float f : { 100.f, 1000.f, 10000.f })
-            {
-                const float fr = std::log (f / fLo) / std::log (fHi / fLo);
-                auto q = bulge (x0 + (x1 - x0) * fr, glass.getBottom() - 2.f);
-                g.drawText (f >= 1000.f ? juce::String ((int) (f / 1000.f)) + "k" : juce::String ((int) f), (int) q.x - 20, (int) q.y - 10, 40, 12, juce::Justification::centred);
-            }
-        }
-
-        // scanlines
-        g.setColour (juce::Colours::black.withAlpha (0.22f));
-        for (float y = glass.getY() - 10.f; y < glass.getBottom() + 12.f; y += 3.f) g.fillRect (glass.getX() - 12.f, y, glass.getWidth() + 24.f, 1.2f);
-
-        // vignette (elliptic)
-        {
-            juce::Graphics::ScopedSaveState s2 (g);
-            g.addTransform (juce::AffineTransform::scale (1.f, glass.getHeight() / glass.getWidth() * 1.5f, c.x, c.y));
-            juce::ColourGradient vg (juce::Colours::transparentBlack, c.x, c.y, juce::Colours::black.withAlpha (0.85f), c.x + glass.getWidth() * 0.62f, c.y, true);
-            vg.addColour (0.72, juce::Colours::black.withAlpha (0.2f));
-            g.setGradientFill (vg);
-            g.fillRect (glass.expanded (20.f, 400.f));
-        }
-        // glass highlight
-        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.13f), 0, glass.getY() - 8.f, juce::Colours::white.withAlpha (0.f), 0, glass.getY() + 56.f, false));
-        g.fillEllipse (c.x - 340.f, glass.getY() - 38.f, 600.f, 92.f);
-    }
-    g.setColour (juce::Colours::white.withAlpha (0.12f));
-    g.strokePath (gp, juce::PathStrokeType (1.2f));
-
-    // Wave / Spectrum switch
-    toggleArea = { glass.getX() + 12.f, glass.getY() + 8.f, 128.f, 24.f };
-    g.setColour (juce::Colour (0xe6141215));
-    g.fillRoundedRectangle (toggleArea, 6.f);
-    const char* names[2] = { "Wave", "Spectrum" };
-    const float ws[2] = { 52.f, 76.f };
-    float tx = toggleArea.getX();
-    for (int i = 0; i < 2; ++i)
-    {
-        auto r = juce::Rectangle<float> (tx, toggleArea.getY(), ws[i], 24.f);
-        if (i == proc.screenMode) { g.setColour (col::pink); g.fillRoundedRectangle (r, 6.f); }
-        g.setColour (i == proc.screenMode ? juce::Colours::white : juce::Colour (0xffbdb5ba));
-        g.setFont (font (11.5f));
-        g.drawText (names[i], r, juce::Justification::centred);
-        tx += ws[i];
-    }
-
-    // pitch source readout
-    const auto txt = noteText();
-    g.setFont (font (11.5f));
-    const float tw = juce::GlyphArrangement::getStringWidth (font (11.5f), txt) + 30.f;
-    auto nr = juce::Rectangle<float> (glass.getRight() - 12.f - tw, glass.getY() + 8.f, tw, 24.f);
-    g.setColour (juce::Colour (0xe6141215));
-    g.fillRoundedRectangle (nr, 6.f);
-    g.setColour (col::pink.withAlpha (0.3f));
-    g.fillEllipse (nr.getX() + 6.f, nr.getCentreY() - 7.f, 14.f, 14.f);
-    g.setColour (col::pink);
-    g.fillEllipse (nr.getX() + 9.f, nr.getCentreY() - 4.f, 8.f, 8.f);
-    g.setColour (col::value);
-    g.drawText (txt, nr.withTrimmedLeft (24.f), juce::Justification::centredLeft);
-}
-
-void CrtScreen::mouseDown (const juce::MouseEvent& e)
-{
-    if (toggleArea.contains (e.position))
-    {
-        proc.screenMode = e.position.x < toggleArea.getX() + 52.f ? 0 : 1;
-        repaint();
+        g.setColour (on ? Colour (0xff111114) : t.accent);
+        g.fillEllipse (r.getRight() - 9.0f, r.getY() + 4.0f, 5.0f, 5.0f);
     }
 }
 
 //==============================================================================
-// LevelMeter
-//==============================================================================
-LevelMeter::LevelMeter (VoiceFuckerProcessor& p, bool isInput) : proc (p), input (isInput)
+HarmStrips::HarmStrips (VoiceFuckerProcessor& p) : proc (p)
 {
-    level[0] = level[1] = -100.f;
+    for (int i = 0; i < Tables::numIntervals; ++i)
+    {
+        auto* f = faders.add (new Slider (Slider::LinearVertical, Slider::NoTextBox));
+        f->setWantsKeyboardFocus (false);
+        f->setSliderSnapsToMousePosition (false);
+        addAndMakeVisible (f);
+        faderAtt.add (new AudioProcessorValueTreeState::SliderAttachment (proc.apvts, ParamIDs::ivDb (i), *f));
+        auto* prm = proc.apvts.getParameter (ParamIDs::ivDb (i));
+        f->setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
+        f->onValueChange = [this] { repaint(); };
+
+        auto* c = chips.add (new ChipButton());
+        c->shown = Tables::intervalNames[i];
+        addAndMakeVisible (c);
+        chipAtt.add (new AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, ParamIDs::ivOn (i), *c));
+        c->onStateChange = [this] { repaint(); };
+        // touching the fader of a muted voice switches it on
+        f->onDragStart = [this, i] { if (! chips[i]->getToggleState()) chips[i]->setToggleState (true, sendNotificationSync); };
+    }
     startTimerHz (30);
 }
 
-void LevelMeter::timerCallback()
+void HarmStrips::resized()
 {
-    float pk = -100.f;
-    for (int c = 0; c < 2; ++c)
-    {
-        const float v = (input ? proc.inPeak[c] : proc.outPeak[c]).exchange (0.f);
-        const float db = toDb (v);
-        level[c] = std::max (db, level[c] - 1.5f);
-        pk = std::max (pk, db);
-    }
-    if (pk >= peakHold) { peakHold = pk; holdFrames = 45; }
-    else if (--holdFrames < 0) peakHold = std::max (pk, peakHold - 0.6f);
-    repaint();
-}
-
-void LevelMeter::paint (juce::Graphics& g)
-{
-    const float cx = (float) getWidth() * 0.5f;
-    g.setColour (col::text);
-    const juce::String label (input ? "IN" : "OUT");
-    const auto f = font (11.f, true);
-    const float lw = juce::GlyphArrangement::getStringWidth (f, label) + 2.5f * (float) (label.length() - 1);
-    drawSpaced (g, label, f, cx - lw * 0.5f, 16.f, 2.5f);
-
-    const bool over = peakHold > 0.f;
-    auto box = juce::Rectangle<float> (cx - 20.f, 26.f, 40.f, 20.f);
-    g.setColour (juce::Colour (0xff161417));
-    g.fillRoundedRectangle (box, 5.f);
-    g.setColour (over ? juce::Colour (0xffff3b5c) : juce::Colours::white.withAlpha (0.08f));
-    g.drawRoundedRectangle (box, 5.f, 1.2f);
-    g.setColour (over ? juce::Colour (0xffff6f9a) : juce::Colour (0xffc9c2c6));
-    g.setFont (font (11.f));
-    g.drawText (peakHold < -60.f ? juce::String ("-inf") : (peakHold > 0.05f ? "+" : "") + juce::String (peakHold, 1), box, juce::Justification::centred);
-
-    const float top = 62.f, bottom = (float) getHeight() - 8.f;
-    auto yFor = [&] (float db) { return bottom - (bottom - top) * juce::jlimit (0.f, 1.f, (db + 60.f) / 66.f); };
-    for (int c = 0; c < 2; ++c)
-    {
-        const float bx = cx - 9.f + (float) c * 11.f;
-        g.setColour (juce::Colour (0xff232024));
-        g.fillRect (bx, top, 7.f, bottom - top);
-        const float y = yFor (level[c]);
-        g.setGradientFill (juce::ColourGradient (col::pinkHot, 0, top, juce::Colour (0xff6d5867), 0, bottom, false));
-        g.fillRect (bx, y, 7.f, bottom - y);
-        if (level[c] > 0.f) { g.setColour (juce::Colour (0xffff3b5c)); g.fillRect (bx, top, 7.f, yFor (0.f) - top); }
-    }
-    const float hy = yFor (peakHold);
-    g.setColour (juce::Colour (0xffffc2dc));
-    g.fillRect (cx - 9.f, hy, 18.f, 1.5f);
-    g.setColour (juce::Colours::white.withAlpha (0.18f));
-    for (float db : { 0.f, -6.f, -12.f, -24.f, -36.f, -48.f })
-        g.fillRect (cx + (input ? 12.f : -18.f), yFor (db), 5.f, 1.f);
-}
-
-//==============================================================================
-// Preset bar
-//==============================================================================
-PresetBar::PresetBar (VoiceFuckerProcessor& p) : proc (p) { startTimerHz (6); }
-
-void PresetBar::timerCallback()
-{
-    if (proc.getPresetName() != shown || proc.isPresetDirty() != dirtyShown) repaint();
-}
-
-juce::Array<PresetBar::Entry> PresetBar::entries() const
-{
-    juce::Array<Entry> e;
-    auto f = proc.getFactoryPresetNames();
-    for (int i = 0; i < f.size(); ++i) e.add ({ f[i], i, {} });
-    for (auto& file : proc.getUserPresets()) e.add ({ file.getFileNameWithoutExtension(), -1, file });
-    return e;
-}
-
-void PresetBar::paint (juce::Graphics& g)
-{
-    shown = proc.getPresetName(); dirtyShown = proc.isPresetDirty();
-    drawChevron (g, 10.f, 16.f, true, juce::Colour (0xffbdb5ba));
-    auto box = juce::Rectangle<float> (22.f, 2.f, 182.f, 28.f);
-    g.setColour (juce::Colour (0xff1c1a1d));
-    g.fillRoundedRectangle (box, 6.f);
-    g.setColour (juce::Colours::white.withAlpha (0.07f));
-    g.drawRoundedRectangle (box, 6.f, 1.f);
-    g.setColour (juce::Colour (0xffece6e9));
-    g.setFont (font (12.5f));
-    g.drawText (shown + (dirtyShown ? " *" : ""), box.withTrimmedLeft (12.f).withTrimmedRight (26.f), juce::Justification::centredLeft, true);
-    juce::Path a; a.startNewSubPath (box.getRight() - 18.f, 14.f); a.lineTo (box.getRight() - 13.f, 19.f); a.lineTo (box.getRight() - 8.f, 14.f);
-    g.setColour (col::pink);
-    g.strokePath (a, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    drawChevron (g, 216.f, 16.f, false, juce::Colour (0xffbdb5ba));
-    // save (floppy)
-    g.setColour (col::text);
-    auto fl = juce::Rectangle<float> (232.f, 6.f, 20.f, 20.f);
-    g.drawRoundedRectangle (fl, 3.f, 1.6f);
-    g.drawRect (fl.getX() + 5.f, fl.getY(), 10.f, 6.f, 1.4f);
-    g.drawRect (fl.getX() + 4.f, fl.getY() + 11.f, 12.f, 9.f, 1.4f);
-}
-
-void PresetBar::mouseDown (const juce::MouseEvent& e)
-{
-    if (e.x < 20) step (-1);
-    else if (e.x < 205) showMenu();
-    else if (e.x < 228) step (1);
-    else savePreset();
-}
-
-void PresetBar::step (int dir)
-{
-    auto list = entries();
-    if (list.isEmpty()) return;
-    int cur = -1;
-    for (int i = 0; i < list.size(); ++i) if (list[i].name == proc.getPresetName()) cur = i;
-    const int next = (cur + dir + list.size()) % list.size();
-    auto& en = list.getReference (next);
-    if (en.factory >= 0) proc.loadFactoryPreset (en.factory); else proc.loadUserPreset (en.file);
-    repaint();
-}
-
-void PresetBar::showMenu()
-{
-    auto list = entries();
-    juce::PopupMenu m;
-    m.addSectionHeader ("Factory");
-    for (int i = 0; i < list.size(); ++i)
-    {
-        if (i > 0 && list[i].factory < 0 && list[i - 1].factory >= 0) m.addSectionHeader ("User");
-        m.addItem (i + 1, list[i].name, true, list[i].name == proc.getPresetName());
-    }
-    m.addSeparator();
-    m.addItem (1000, "Save preset...");
-    m.addItem (1001, "Open presets folder");
-    juce::Component::SafePointer<PresetBar> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (182),
-                     [safe, list] (int r)
-                     {
-                         if (safe == nullptr || r == 0) return;
-                         if (r == 1000) { safe->savePreset(); return; }
-                         if (r == 1001)
-                         {
-                             auto f = safe->proc.getUserPresetFolder();
-                             f.createDirectory();
-                             f.startAsProcess();
-                             return;
-                         }
-                         auto& en = list.getReference (r - 1);
-                         if (en.factory >= 0) safe->proc.loadFactoryPreset (en.factory); else safe->proc.loadUserPreset (en.file);
-                         safe->repaint();
-                     });
-}
-
-void PresetBar::savePreset()
-{
-    saveWindow = std::make_unique<juce::AlertWindow> ("Save preset", "Preset name:", juce::MessageBoxIconType::NoIcon, this);
-    saveWindow->setLookAndFeel (&getLookAndFeel());
-    saveWindow->addTextEditor ("name", proc.getPresetName() == "Init" ? juce::String ("My preset") : proc.getPresetName());
-    saveWindow->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    saveWindow->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-    juce::Component::SafePointer<PresetBar> safe (this);
-    saveWindow->enterModalState (true, juce::ModalCallbackFunction::create ([safe] (int r)
-    {
-        if (safe == nullptr) return;
-        if (r == 1 && safe->saveWindow != nullptr)
-            safe->proc.saveUserPreset (safe->saveWindow->getTextEditorContents ("name"));
-        if (safe->saveWindow != nullptr) safe->saveWindow->setLookAndFeel (nullptr);
-        safe->saveWindow.reset();
-        safe->repaint();
-    }), false);
-}
-
-//==============================================================================
-// Harmonize
-//==============================================================================
-HarmPanel::HarmPanel (VoiceFuckerProcessor& p) : proc (p)
-{
-    auto& s = proc.apvts;
-    for (int i = 0; i < Params::numIntervals; ++i)
-    {
-        auto* f = faders.add (new ui::Fader (s, Params::ivDb (i)));
-        addAndMakeVisible (f);
-        auto* c = chips.add (new ui::Chip (s, Params::ivOn (i), Params::intervalNames[i]));
-        addAndMakeVisible (c);
-        // touching a fader of a muted voice switches it on
-        f->onDragStart = [this, i] { if (! chips[i]->getToggleState()) chips[i]->setToggleState (true, juce::sendNotificationSync); };
-    }
-    power = std::make_unique<ui::PowerButton> (s, "harm_on");   addAndMakeVisible (*power);
-    scaleLed = std::make_unique<ui::Led> (s, "harm_scale", ""); addAndMakeVisible (*scaleLed);
-    key = std::make_unique<ui::Combo> (s, "harm_key");           addAndMakeVisible (*key);
-    pan = std::make_unique<ui::Segmented> (s, "harm_pan", Params::panModes); addAndMakeVisible (*pan);
-    level = std::make_unique<ui::Knob> (s, "harm_level", "Level");    addAndMakeVisible (*level);
-    detune = std::make_unique<ui::Knob> (s, "harm_detune", "Detune"); addAndMakeVisible (*detune);
-    spread = std::make_unique<ui::Knob> (s, "harm_spread", "Spread"); addAndMakeVisible (*spread);
-    startTimerHz (20);
-}
-
-void HarmPanel::resized()
-{
-    for (int i = 0; i < Params::numIntervals; ++i)
+    for (int i = 0; i < Tables::numIntervals; ++i)
     {
         const int x = stripX0 + i * stripStep;
-        faders[i]->setBounds (x - 14, 52, 28, 108);
-        chips[i]->setBounds (x - 21, 166, 42, 24);
+        faders[i]->setBounds (x - 14, 20, 28, 84);
+        chips[i]->setBounds (x - 25, 108, 50, 26);
     }
-    power->setBounds (6, 11, 20, 20);
-    scaleLed->setBounds (526, 52, 22, 22);
-    key->setBounds (552, 52, 162, 22);
-    pan->setBounds (530, 92, 184, 22);
-    level->setCentre (561.f, 163.f);
-    detune->setCentre (622.f, 163.f);
-    spread->setCentre (683.f, 163.f);
 }
 
-float HarmPanel::panFor (int i) const
+void HarmStrips::setHelp (bool on, Help::Lang l)
 {
-    auto& s = proc.apvts;
-    const int mode = (int) s.getRawParameterValue ("harm_pan")->load();
-    const float sp = s.getRawParameterValue ("harm_spread")->load() * 0.01f;
-    juce::Array<int> act;
-    for (int j = 0; j < Params::numIntervals; ++j) if (chips[j]->getToggleState()) act.add (j);
-    const int k = act.indexOf (i), n = act.size();
-    if (k < 0) return 0.f;
-    if (mode == 0) return (k % 2 ? 1.f : -1.f) * sp * (0.5f + 0.5f * (float) (k + 1) / (float) n);
-    if (mode == 1) return n > 1 ? (-1.f + 2.f * (float) k / (float) (n - 1)) * sp : 0.f;
-    return 0.f;
+    helpOn = on; lang = l;
+    for (auto* f : faders) f->setTooltip (on ? Help::tip ("fader", l) : String());
+    for (auto* c : chips) c->setTooltip (on ? Help::tip ("chip", l) : String());
+    setTooltip (on ? Help::tip ("panDot", l) : String());
 }
 
-void HarmPanel::timerCallback()
+void HarmStrips::timerCallback()
 {
-    auto& s = proc.apvts;
-    juce::int64 h = 0;
-    for (int i = 0; i < Params::numIntervals; ++i)
-        h = h * 31 + (chips[i]->getToggleState() ? 1 : 0) * 7 + juce::roundToInt (faders[i]->getValue() * 10.0);
-    h = h * 31 + juce::roundToInt (s.getRawParameterValue ("harm_pan")->load());
-    h = h * 31 + juce::roundToInt (s.getRawParameterValue ("harm_spread")->load());
-    const bool on = s.getRawParameterValue ("harm_on")->load() > 0.5f;
-    h = h * 31 + (on ? 1 : 0);
-    if (h != lastHash)
+    flicker += 0.11f;
+    const bool on = proc.apvts.getRawParameterValue (ParamIDs::harmOn)->load() > 0.5f;
+    for (int i = 0; i < Tables::numIntervals; ++i)
     {
-        lastHash = h;
-        for (int i = 0; i < Params::numIntervals; ++i)
+        const int real = proc.uiInterval[(size_t) i].load();
+        const String txt = (real > 0 ? "+" : "") + String (real);
+        const bool moved = real != Tables::intervals[i];
+        if (chips[i]->shown != txt || chips[i]->moved != moved)
         {
-            faders[i]->voiceOn = chips[i]->getToggleState();
-            faders[i]->blockOn = on;
-            chips[i]->blockOn = on;
-            faders[i]->repaint(); chips[i]->repaint();
+            chips[i]->shown = txt;
+            chips[i]->moved = moved;
+            chips[i]->repaint();
         }
-        const float a = on ? 1.f : 0.4f;
-        for (juce::Component* c : { (juce::Component*) scaleLed.get(), (juce::Component*) key.get(), (juce::Component*) pan.get(),
-                                    (juce::Component*) level.get(), (juce::Component*) detune.get(), (juce::Component*) spread.get() })
-            c->setAlpha (a);
-        for (int i = 0; i < Params::numIntervals; ++i) { faders[i]->setAlpha (a); chips[i]->setAlpha (a); }
-        pan->active = on;
-        repaint();
+        const bool vOn = chips[i]->getToggleState();
+        if ((bool) faders[i]->getProperties().getWithDefault ("voiceOn", true) != vOn)
+        {
+            faders[i]->getProperties().set ("voiceOn", vOn);
+            faders[i]->repaint();
+        }
     }
+    setAlpha (on ? 1.0f : 0.4f);
+    if (roundToInt (proc.apvts.getRawParameterValue (ParamIDs::harmPan)->load()) == 1)
+        repaint (0, panY - 12, getWidth(), 24);
 }
 
-void HarmPanel::paint (juce::Graphics& g)
+float HarmStrips::effectivePan (int i) const
 {
-    auto b = getLocalBounds().toFloat();
-    g.setColour (col::panel);
-    g.fillRoundedRectangle (b, 8.f);
-    g.setColour (col::hair);
-    g.drawRoundedRectangle (b.reduced (0.5f), 8.f, 1.f);
-    const bool on = proc.apvts.getRawParameterValue ("harm_on")->load() > 0.5f;
-    g.setColour (on ? col::text : juce::Colour (0xff6a6267));
-    drawSpaced (g, "HARMONIZE", font (10.5f, true), 30.f, 25.f, 2.5f);
+    const float p = proc.apvts.getRawParameterValue (ParamIDs::ivPan (i))->load();
+    const float s = proc.apvts.getRawParameterValue (ParamIDs::harmSpread)->load() * 0.01f;
+    if (std::abs (p) < 0.001f) return 0.0f;
+    return p + ((p > 0 ? 1.0f : -1.0f) - p) * s;
+}
 
-    g.setColour (juce::Colours::black.withAlpha (0.25f));
-    g.fillRoundedRectangle (14.f, 34.f, (float) (stripStep * Params::numIntervals) + 6.f, 172.f, 8.f);
+void HarmStrips::paint (Graphics& g)
+{
+    const auto& t = themeOf (*this);
+    g.setColour (Colours::black.withAlpha (t.lightBg ? 0.12f : 0.25f));
+    g.fillRoundedRectangle (0.0f, 0.0f, (float) (stripX0 + 8 * stripStep + 64), (float) getHeight(), 9.0f);
 
-    const float alpha = on ? 1.f : 0.4f;
     // dB scale
     auto* f0 = faders[0];
-    for (float db : { 0.f, -12.f, -24.f, -36.f })
+    for (const float db : { 0.0f, -12.0f, -24.0f, -36.0f })
     {
         const float y = (float) f0->getY() + (float) f0->getPositionOfValue (db);
-        g.setColour (juce::Colours::white.withAlpha (0.05f * alpha));
-        g.drawHorizontalLine (juce::roundToInt (y), 22.f, (float) (stripX0 + 8 * stripStep + 18));
-        g.setColour (juce::Colour (0xff5f585c).withMultipliedAlpha (alpha));
-        g.setFont (font (9.5f));
-        g.drawText (juce::String ((int) db), stripX0 + 8 * stripStep + 18, (int) y - 6, 26, 12, juce::Justification::centredLeft);
+        g.setColour (Colours::white.withAlpha (0.05f));
+        g.drawHorizontalLine (roundToInt (y), 8.0f, (float) (stripX0 + 8 * stripStep + 30));
+        g.setColour (Colour ((uint8) 200, 200, 210, 0.45f));
+        g.setFont (uiFont (10.0f));
+        g.drawText (String ((int) db), stripX0 + 8 * stripStep + 32, (int) y - 6, 28, 12, Justification::centredLeft);
     }
 
-    const int mode = (int) proc.apvts.getRawParameterValue ("harm_pan")->load();
-    for (int i = 0; i < Params::numIntervals; ++i)
+    const int mode = roundToInt (proc.apvts.getRawParameterValue (ParamIDs::harmPan)->load());
+    const float sp = proc.apvts.getRawParameterValue (ParamIDs::harmSpread)->load() * 0.01f;
+    for (int i = 0; i < Tables::numIntervals; ++i)
     {
         const float x = (float) (stripX0 + i * stripStep);
         const bool vOn = chips[i]->getToggleState();
         const float db = (float) faders[i]->getValue();
-        g.setColour ((vOn ? juce::Colour (0xfff2ecef) : juce::Colour (0xff7d7579)).withMultipliedAlpha (alpha));
-        g.setFont (font (11.f, true));
-        g.drawText (vOn ? (db > 0.05f ? "+" : "") + juce::String (db, 1) : juce::String ("off"), (int) x - 24, 36, 48, 13, juce::Justification::centred);
+        g.setColour (vOn ? Colour (0xffececf0) : Colour (0xff7a7a82));
+        g.setFont (uiFont (12.0f, true));
+        g.drawText (vOn ? (db > 0.05f ? "+" : "") + String (db, 1) : String ("off"), (int) x - 28, 3, 56, 14, Justification::centred);
 
-        // pan indicator
-        const float py = 201.f;
-        g.setColour (juce::Colours::white.withAlpha (0.12f * alpha));
-        g.drawLine (x - 16.f, py, x + 16.f, py, 1.f);
-        g.setColour (juce::Colours::white.withAlpha (0.25f * alpha));
-        g.fillRect (x - 0.5f, py - 3.f, 1.f, 6.f);
-        if (vOn)
+        // stereo position
+        const float hw = 26.0f, py = (float) panY;
+        g.setColour (Colours::white.withAlpha (0.16f));
+        g.drawLine (x - hw, py, x + hw, py, 1.0f);
+        g.setColour (Colours::white.withAlpha (0.30f));
+        g.fillRect (x - 0.5f, py - 4.0f, 1.0f, 8.0f);
+        g.fillRect (x - hw - 0.5f, py - 3.0f, 1.0f, 6.0f);
+        g.fillRect (x + hw - 0.5f, py - 3.0f, 1.0f, 6.0f);
+        if (! vOn) continue;
+        if (mode == 1)
         {
-            if (mode == 2) { g.setColour (juce::Colour (0xffffb3d4).withAlpha (0.8f * alpha)); g.fillRect (x - 16.f, py - 1.5f, 32.f, 3.f); }
-            else { g.setColour (col::pink.withMultipliedAlpha (alpha)); g.fillEllipse (x + panFor (i) * 16.f - 3.2f, py - 3.2f, 6.4f, 6.4f); }
-        }
-    }
-
-    g.setColour (col::hair);
-    g.drawVerticalLine (518, 40.f, b.getHeight() - 14.f);
-    drawCaption (g, "Scale", 530.f, 46.f, alpha);
-    drawCaption (g, "Pan", 530.f, 86.f, alpha);
-}
-
-//==============================================================================
-// MainPanel
-//==============================================================================
-ui::Knob* MainPanel::knob (const juce::String& id, const juce::String& label, float cx, float cy, Module* m)
-{
-    auto* k = new ui::Knob (proc.apvts, id, label);
-    owned.add (k);
-    addAndMakeVisible (k);
-    k->setCentre (cx, cy);
-    if (m != nullptr) m->items.add (k);
-    return k;
-}
-
-MainPanel::MainPanel (VoiceFuckerProcessor& p, VoiceFuckerEditor& e)
-    : proc (p), editor (e), screen (p), inMeter (p, true), outMeter (p, false), presets (p), harm (p)
-{
-    // asphalt texture
-    asphalt = juce::Image (juce::Image::RGB, W * 2, H * 2, false);
-    {
-        juce::Image::BitmapData bd (asphalt, juce::Image::BitmapData::writeOnly);
-        juce::Random rnd (0x5eed);
-        for (int y = 0; y < bd.height; ++y)
-            for (int x = 0; x < bd.width; ++x)
+            const float w = hw * (0.15f + 0.85f * sp);
+            for (int k = -6; k <= 6; ++k)
             {
-                float v = 26.f + (rnd.nextFloat() - 0.5f) * 22.f;
-                if (rnd.nextFloat() < 0.003f) v += 40.f + rnd.nextFloat() * 50.f;
-                const auto u = (juce::uint8) juce::jlimit (0, 255, (int) v);
-                bd.setPixelColour (x, y, juce::Colour (u, (juce::uint8) juce::jmax (0, u - 1), (juce::uint8) juce::jmin (255, u + 3)));
+                const float fl = 0.35f + 0.65f * std::abs (std::sin (flicker * 2.7f + (float) i * 1.7f + (float) k * 2.3f));
+                g.setColour (t.accent.withAlpha (fl * (1.0f - std::abs ((float) k) / 8.0f)));
+                g.fillRect (x + (float) k / 6.0f * w - 2.0f, py - 5.0f, 4.0f, 10.0f);
             }
-    }
-
-    addAndMakeVisible (screen);   screen.setBounds (72, 58, 726, 184);
-    addAndMakeVisible (inMeter);  inMeter.setBounds (4, 8, 54, 730);
-    addAndMakeVisible (outMeter); outMeter.setBounds (812, 8, 54, 730);
-    addAndMakeVisible (presets);  presets.setBounds (378, 12, 260, 32);
-    addAndMakeVisible (harm);     harm.setBounds (72, 438, 726, 214);
-    gearArea = { 762, 12, 34, 30 };
-
-    knob ("in_gain", "Input", 31.f, 792.f);
-    knob ("out_gain", "Output", 839.f, 792.f);
-
-    auto& s = proc.apvts;
-    modules.reserve (8);
-    auto addModule = [&] (const juce::String& t, juce::Rectangle<int> r, const juce::String& onId) -> Module&
-    {
-        modules.push_back ({ t, r, onId, {} });
-        auto& m = modules.back();
-        if (onId.isNotEmpty())
-        {
-            auto* pb = new ui::PowerButton (s, onId);
-            owned.add (pb); addAndMakeVisible (pb);
-            pb->setBounds (r.getX() + 6, r.getY() + 11, 20, 20);
         }
-        return m;
-    };
-    auto place = [&] (Module& m, juce::Component* c, juce::Rectangle<int> r)
+        else
+        {
+            const float p = proc.apvts.getRawParameterValue (ParamIDs::ivPan (i))->load();
+            const float e = effectivePan (i);
+            if (std::abs (e - p) > 0.01f)
+            {
+                g.setColour (t.accent.withAlpha (0.35f));
+                g.fillEllipse (x + p * hw - 3.5f, py - 3.5f, 7.0f, 7.0f);
+            }
+            g.setColour (t.accent.withAlpha (0.25f));
+            g.fillEllipse (x + e * hw - 9.0f, py - 9.0f, 18.0f, 18.0f);
+            g.setColour (t.accent);
+            g.fillEllipse (x + e * hw - 5.5f, py - 5.5f, 11.0f, 11.0f);
+        }
+    }
+}
+
+int HarmStrips::stripAt (Point<int> pos) const
+{
+    if (std::abs (pos.y - panY) > 13) return -1;
+    for (int i = 0; i < Tables::numIntervals; ++i)
+        if (std::abs (pos.x - (stripX0 + i * stripStep)) <= 30) return i;
+    return -1;
+}
+
+void HarmStrips::mouseMove (const MouseEvent& e)
+{
+    const int i = stripAt (e.getPosition());
+    const bool manual = roundToInt (proc.apvts.getRawParameterValue (ParamIDs::harmPan)->load()) == 0;
+    setMouseCursor (i >= 0 && manual && chips[i]->getToggleState() ? MouseCursor::LeftRightResizeCursor : MouseCursor::NormalCursor);
+}
+
+void HarmStrips::mouseDown (const MouseEvent& e)
+{
+    dragging = -1;
+    const int i = stripAt (e.getPosition());
+    if (i < 0 || roundToInt (proc.apvts.getRawParameterValue (ParamIDs::harmPan)->load()) != 0 || ! chips[i]->getToggleState()) return;
+    dragging = i;
+    proc.apvts.getParameter (ParamIDs::ivPan (i))->beginChangeGesture();
+    mouseDrag (e);
+}
+
+void HarmStrips::mouseDrag (const MouseEvent& e)
+{
+    if (dragging < 0) return;
+    auto* prm = proc.apvts.getParameter (ParamIDs::ivPan (dragging));
+    const float v = jlimit (-1.0f, 1.0f, (float) (e.x - (stripX0 + dragging * stripStep)) / 26.0f);
+    prm->setValueNotifyingHost (prm->convertTo0to1 (std::abs (v) < 0.06f ? 0.0f : v));
+    repaint();
+}
+
+void HarmStrips::mouseUp (const MouseEvent&)
+{
+    if (dragging >= 0) proc.apvts.getParameter (ParamIDs::ivPan (dragging))->endChangeGesture();
+    dragging = -1;
+}
+
+void HarmStrips::mouseDoubleClick (const MouseEvent& e)
+{
+    const int i = stripAt (e.getPosition());
+    if (i < 0) return;
+    auto* prm = proc.apvts.getParameter (ParamIDs::ivPan (i));
+    prm->setValueNotifyingHost (prm->convertTo0to1 (0.0f));
+    repaint();
+}
+
+//==============================================================================
+String VoiceFuckerEditor::loadSetting (const String& key, const String& fallback)
+{
+    PropertiesFile f (settingsOptions());
+    return f.getValue (key, fallback);
+}
+
+void VoiceFuckerEditor::saveSetting (const String& key, const String& value)
+{
+    PropertiesFile f (settingsOptions());
+    f.setValue (key, value);
+    f.saveIfNeeded();
+}
+
+void VoiceFuckerEditor::addCombo (Component& parent, ComboBox& box, const char* paramId, const StringArray& items,
+                                  std::unique_ptr<AudioProcessorValueTreeState::ComboBoxAttachment>& att)
+{
+    box.addItemList (items, 1);
+    box.setWantsKeyboardFocus (false);
+    box.setMouseClickGrabsKeyboardFocus (false);
+    parent.addAndMakeVisible (box);
+    att = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, paramId, box);
+}
+
+VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
+    : AudioProcessorEditor (&p), proc (p)
+{
+    using namespace ParamIDs;
+    setLookAndFeel (&laf);
+    addAndMakeVisible (content);
+
+    content.addAndMakeVisible (presetBar);
+    content.addAndMakeVisible (gear);
+    gear.onClick = [this] { showSettingsMenu(); };
+    content.addAndMakeVisible (scope);
+    content.addAndMakeVisible (inCol);
+    content.addAndMakeVisible (outCol);
+    for (auto* b : { &carrierBlock, &vocBlock, &harmBlock, &dirtBlock, &compBlock, &widthBlock, &mixBlock, &clipBlock })
+        content.addAndMakeVisible (*b);
+
+    auto& apvts = proc.apvts;
+
+    // Carrier
+    addCombo (carrierBlock, sourceBox, carSrc, Tables::sources, sourceAtt);
+    pitchSeg = std::make_unique<Segmented> (*apvts.getParameter (carPitch), Tables::pitchModes);
+    carrierBlock.addAndMakeVisible (*pitchSeg);
+    note.init (carrierBlock, apvts, "Note", carNote, false);
+    glide.init (carrierBlock, apvts, "Glide", carGlide, false);
+    detune.init (carrierBlock, apvts, "Detune", carDetune, false);
+    spread.init (carrierBlock, apvts, "Spread", carSpread, false);
+    noise.init (carrierBlock, apvts, "Noise", carNoise, false);
+
+    // Vocoder
+    bands.init (vocBlock, apvts, "Bands", vocBands, false);
+    formant.init (vocBlock, apvts, "Formant", vocFormant, false);
+    attack.init (vocBlock, apvts, "Attack", vocAttack, false);
+    release.init (vocBlock, apvts, "Release", vocRelease, false);
+    sib.init (vocBlock, apvts, "Sibilance", vocSib, false);
+    gate.init (vocBlock, apvts, "Gate", vocGate, false);
+
+    // Harmonize
+    harmBlock.addAndMakeVisible (strips);
+    scaleButton.setWantsKeyboardFocus (false);
+    scaleButton.getProperties().set ("fontSize", 12.0);
+    harmBlock.addAndMakeVisible (scaleButton);
+    scaleAtt2 = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (apvts, harmScale, scaleButton);
+    addCombo (harmBlock, rootBox, harmRoot, Tables::roots, rootAtt);
+    addCombo (harmBlock, scaleBox, harmMode, Tables::scaleNames(), scaleAtt);
+    panSeg = std::make_unique<Segmented> (*apvts.getParameter (harmPan), Tables::panModes, true);
+    harmBlock.addAndMakeVisible (*panSeg);
+    for (auto* b : { &altButton, &fanButton })
     {
-        owned.add (c); addAndMakeVisible (c); c->setBounds (r); m.items.add (c);
-    };
-    auto row = [&] (Module& m, std::initializer_list<std::pair<const char*, const char*>> ks)
+        b->setWantsKeyboardFocus (false);
+        harmBlock.addAndMakeVisible (*b);
+    }
+    altButton.onClick = [this] { quickPan (false); };
+    fanButton.onClick = [this] { quickPan (true); };
+    harmLevel.init (harmBlock, apvts, "Level", ParamIDs::harmLevel, true);
+    harmDetune.init (harmBlock, apvts, "Detune", ParamIDs::harmDetune, true);
+    harmSpread.init (harmBlock, apvts, "Spread", ParamIDs::harmSpread, true);
+    harmSpread.slider.onValueChange = [this] { strips.repaint(); };
+
+    // Dirt
+    addCombo (dirtBlock, dirtModeBox, ParamIDs::dirtMode, Tables::dirtModes, dirtModeAtt);
+    drive.init (dirtBlock, apvts, "Drive", dirtDrive, true);
+    crunch.init (dirtBlock, apvts, "Crunch", dirtCrunch, true);
+    destroy.init (dirtBlock, apvts, "Destroy", dirtDestroy, true);
+
+    // Comp
+    addCombo (compBlock, compModeBox, ParamIDs::compMode, Tables::compModes, compModeAtt);
+    ottDepth.init (compBlock, apvts, "Depth", ParamIDs::ottDepth, true);
+    ottTime.init (compBlock, apvts, "Time", ParamIDs::ottTime, true);
+    ottUp.init (compBlock, apvts, "Up", ParamIDs::ottUp, true);
+    ottDown.init (compBlock, apvts, "Down", ParamIDs::ottDown, true);
+    glueThresh.init (compBlock, apvts, "Thresh", ParamIDs::glueThresh, true);
+    glueRatio.init (compBlock, apvts, "Ratio", ParamIDs::glueRatio, true);
+    glueAttack.init (compBlock, apvts, "Attack", ParamIDs::glueAttack, true);
+    glueRelease.init (compBlock, apvts, "Release", ParamIDs::glueRelease, true);
+    compMix.init (compBlock, apvts, "Mix", ParamIDs::compMix, true);
+
+    // Width
+    widthSeg = std::make_unique<Segmented> (*apvts.getParameter (widthMode), Tables::widthModes, true);
+    widthBlock.addAndMakeVisible (*widthSeg);
+    width.init (widthBlock, apvts, "Width", widthAmt, true);
+    mono.init (widthBlock, apvts, "Mono bass", widthMono, true);
+
+    // Mix
+    autoGainButton.setWantsKeyboardFocus (false);
+    autoGainButton.getProperties().set ("fontSize", 12.0);
+    mixBlock.addAndMakeVisible (autoGainButton);
+    autoGainAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (apvts, ParamIDs::autoGain, autoGainButton);
+    mix.init (mixBlock, apvts, "Mix", ParamIDs::mix, true);
+
+    // Clip
+    clipMode = std::make_unique<Segmented> (*apvts.getParameter (ParamIDs::clipMode), Tables::clipModes, true);
+    clipBlock.addAndMakeVisible (*clipMode);
+    ceiling.init (clipBlock, apvts, "Ceiling", ParamIDs::ceiling, true);
+    ceiling.slider.onDragStart = [this] { scope.touchCeiling (true); };
+    ceiling.slider.onDragEnd = [this] { scope.touchCeiling (false); };
+    ceiling.slider.onValueChange = [this] { if (ceiling.slider.isMouseOverOrDragging()) scope.touchCeiling (ceiling.slider.isMouseButtonDown()); };
+
+    // Overlays
+    content.addChildComponent (about);
+    content.addChildComponent (tour);
+    content.addChildComponent (welcome);
+    tour.resolveTarget = [this] (const String& name) { return tourTarget (name); };
+    tour.onStep = [this] (const String& name)
     {
-        const float step = (float) m.r.getWidth() / (float) ks.size();
-        int i = 0;
-        for (auto& [id, label] : ks) knob (id, label, (float) m.r.getX() + step * ((float) i++ + 0.5f), (float) m.r.getY() + 126.f, &m);
+        if (name == "pills") scope.setView (ScopeView::View::eq);
+        else if (name == "scope") scope.setView (ScopeView::View::wave);
+        else if (name == "vocoder") scope.setView (ScopeView::View::spectrum);
+    };
+    tour.onFinish = [] { saveSetting ("tour", "never"); };
+    welcome.onLanguage = [this] (Help::Lang l)
+    {
+        lang = l;
+        saveSetting ("helpLang", l == Help::Lang::ru ? "ru" : "en");
+        applyHelp();
+    };
+    welcome.onChoice = [this] (int choice)
+    {
+        welcome.setVisible (false);
+        if (choice == 0) tour.start (lang);
+        else if (choice == 2) saveSetting ("tour", "never");
     };
 
+    scope.onBarsChanged = [] (int i) { saveSetting ("bars", String (i)); };
+    scope.setBarsIndex (loadSetting ("bars", "1").getIntValue());
+    scope.onViewChanged = [] (ScopeView::View v) { saveSetting ("view", String ((int) v)); };
+    scope.setView ((ScopeView::View) jlimit (0, 2, loadSetting ("view", "0").getIntValue()));
+
+    helpOn = loadSetting ("help", "on") != "off";
+    lang = loadSetting ("helpLang", "en") == "ru" ? Help::Lang::ru : Help::Lang::en;
+    applyTheme (Theme::byName (loadSetting ("theme", "Asphalt")), false);
+    welcome.setLang (lang);
+    applyHelp();
+    scale = jlimit (0.6f, 2.0f, loadSetting ("scale", "1.0").getFloatValue());
+
+    setResizable (true, true);
+    setResizeLimits ((int) (baseW * 0.6f), (int) (baseH * 0.6f), baseW * 2, baseH * 2);
+    if (auto* c = getConstrainer())
+        c->setFixedAspectRatio ((double) baseW / (double) baseH);
+    setSize (roundToInt (baseW * scale), roundToInt (baseH * scale));
+
+    if (loadSetting ("tour", "") != "never" && ! askedThisRun)
     {
-        auto& m = addModule ("CARRIER", { 72, 250, 326, 180 }, {});
-        place (m, new ui::Combo (s, "car_src"), { m.r.getX() + 14, m.r.getY() + 52, 118, 22 });
-        place (m, new ui::Segmented (s, "car_pitch", Params::pitchModes), { m.r.getX() + 142, m.r.getY() + 52, 170, 22 });
-        row (m, { { "car_note", "Note" }, { "car_glide", "Glide" }, { "car_detune", "Detune" }, { "car_spread", "Spread" }, { "car_noise", "Noise" } });
+        askedThisRun = true;
+        showWelcome();
     }
+    timerCallback();
+    startTimerHz (30);
+}
+
+VoiceFuckerEditor::~VoiceFuckerEditor()
+{
+    stopTimer();
+    saveSetting ("scale", String (scale, 3));
+    tooltipWindow.reset();
+    setLookAndFeel (nullptr);
+}
+
+void VoiceFuckerEditor::quickPan (bool fan)
+{
+    Array<int> act;
+    for (int i = 0; i < Tables::numIntervals; ++i)
+        if (proc.apvts.getRawParameterValue (ParamIDs::ivOn (i))->load() > 0.5f) act.add (i);
+    if (act.isEmpty())
+        for (int i = 0; i < Tables::numIntervals; ++i) act.add (i);
+    for (int k = 0; k < act.size(); ++k)
     {
-        auto& m = addModule ("VOCODER", { 406, 250, 392, 180 }, "voc_on");
-        row (m, { { "voc_bands", "Bands" }, { "voc_formant", "Formant" }, { "voc_attack", "Attack" },
-                  { "voc_release", "Release" }, { "voc_sib", "Sibilance" }, { "voc_gate", "Gate" } });
+        const float v = fan ? (act.size() > 1 ? (-1.0f + 2.0f * (float) k / (float) (act.size() - 1)) * 0.7f : 0.0f)
+                            : (k % 2 ? 1.0f : -1.0f) * (0.4f + 0.3f * (float) (k / 2) / (float) jmax (1, act.size() / 2));
+        auto* prm = proc.apvts.getParameter (ParamIDs::ivPan (act[k]));
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+        prm->endChangeGesture();
     }
+    if (auto* pm = proc.apvts.getParameter (ParamIDs::harmPan))
+        pm->setValueNotifyingHost (pm->convertTo0to1 (0.0f));
+    strips.repaint();
+}
+
+//==============================================================================
+void VoiceFuckerEditor::resized()
+{
+    scale = (float) getWidth() / (float) baseW;
+    content.setTransform (AffineTransform::scale (scale));
+    content.setBounds (0, 0, baseW, baseH);
+
+    presetBar.setBounds (466, 24, 330, 30);
+    gear.setBounds (X1 - 40, 24, 40, 30);
+    scope.setBounds (X0, scopeY, X1 - X0, scopeH);
+    inCol.setBounds (10, 10, 72, baseH - 20);
+    outCol.setBounds (baseW - 82, 10, 72, baseH - 20);
+    about.setBounds (0, 0, baseW, baseH);
+    tour.setBounds (0, 0, baseW, baseH);
+    welcome.setBounds (0, 0, baseW, baseH);
+
+    carrierBlock.setBounds (X0, row1Y, carrierW, row1H);
+    vocBlock.setBounds (X1 - vocW, row1Y, vocW, row1H);
+    harmBlock.setBounds (X0, harmY, X1 - X0, harmH);
+    int x = X0;
+    for (auto [blk, w] : { std::pair<Block*, int> { &dirtBlock, dirtW }, { &compBlock, compW }, { &widthBlock, widthW }, { &mixBlock, mixW }, { &clipBlock, clipW } })
     {
-        auto& m = addModule ("DIRT", { 72, 660, 258, 180 }, "dirt_on");
-        place (m, new ui::Segmented (s, "dirt_mode", Params::dirtModes), { m.r.getX() + 14, m.r.getY() + 52, 150, 22 });
-        row (m, { { "dirt_drive", "Drive" }, { "dirt_crunch", "Crunch" }, { "dirt_destroy", "Destroy" } });
-    }
-    {
-        auto& m = addModule ("WIDTH", { 338, 660, 180, 180 }, "width_on");
-        place (m, new ui::Segmented (s, "width_mode", Params::widthModes), { m.r.getX() + 12, m.r.getY() + 52, 156, 22 });
-        row (m, { { "width_amt", "Width" }, { "width_mono", "Mono bass" } });
-    }
-    {
-        auto& m = addModule ("MIX", { 526, 660, 124, 180 }, {});
-        place (m, new ui::Led (s, "autogain", "Auto gain"), { m.r.getX() + 10, m.r.getY() + 52, 108, 22 });
-        row (m, { { "mix", "Mix" } });
-    }
-    {
-        auto& m = addModule ("CLIP", { 658, 660, 140, 180 }, "clip_on");
-        place (m, new ui::Segmented (s, "clip_mode", Params::clipModes), { m.r.getX() + 14, m.r.getY() + 52, 100, 22 });
-        row (m, { { "clip_ceiling", "Ceiling" } });
+        blk->setBounds (x, row3Y, w, row3H);
+        x += w + row3Gap;
     }
 
-    startTimerHz (10);
+    // Carrier / Vocoder
+    sourceBox.setBounds (14, 32, 140, 24);
+    pitchSeg->setBounds (164, 32, 250, 24);
+    Knob* car[5] = { &note, &glide, &detune, &spread, &noise };
+    for (int i = 0; i < 5; ++i) car[i]->setBounds (14 + i * 80, 62, 80);
+    Knob* voc[6] = { &bands, &formant, &attack, &release, &sib, &gate };
+    for (int i = 0; i < 6; ++i) voc[i]->setBounds (14 + i * 80, 62, 80);
+
+    // Harmonize
+    strips.setBounds (10, 30, 600, harmH - 36);
+    scaleButton.setBounds (628, 32, 76, 24);
+    rootBox.setBounds (708, 32, 66, 24);
+    scaleBox.setBounds (780, 32, 176, 24);
+    panSeg->setBounds (628, 66, 160, 24);
+    altButton.setBounds (796, 66, 76, 24);
+    fanButton.setBounds (880, 66, 76, 24);
+    harmLevel.setBounds (650, 98, 58);
+    harmDetune.setBounds (756, 98, 58);
+    harmSpread.setBounds (862, 98, 58);
+
+    // Row 3
+    const int cy = 32, ky = 60;
+    dirtModeBox.setBounds (10, cy, 110, 22);
+    drive.setBounds (11, ky, 58); crunch.setBounds (69, ky, 58); destroy.setBounds (127, ky, 58);
+    compModeBox.setBounds (10, cy, 92, 22);
+    Knob* ott[4] = { &ottDepth, &ottTime, &ottUp, &ottDown };
+    Knob* glue[4] = { &glueThresh, &glueRatio, &glueAttack, &glueRelease };
+    for (int i = 0; i < 4; ++i) { ott[i]->setBounds (11 + i * 58, ky, 58); glue[i]->setBounds (11 + i * 58, ky, 58); }
+    compMix.setBounds (11 + 4 * 58, ky, 58);
+    widthSeg->setBounds (10, cy, widthW - 20, 22);
+    width.setBounds (30, ky, 58); mono.setBounds (108, ky, 58);
+    autoGainButton.setBounds (6, cy, 94, 22);
+    mix.setBounds ((mixW - 58) / 2, ky, 58);
+    clipMode->setBounds (10, cy, clipW - 20, 22);
+    ceiling.setBounds ((clipW - 58) / 2, ky, 58);
+}
+
+void VoiceFuckerEditor::timerCallback()
+{
+    using namespace ParamIDs;
+    auto raw = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+    inCol.push (proc.inPeak[0].exchange (0.0f), proc.inPeak[1].exchange (0.0f));
+    outCol.push (proc.outPeak[0].exchange (0.0f), proc.outPeak[1].exchange (0.0f));
+
+    const bool glueMode = roundToInt (raw (ParamIDs::compMode)) == 1;
+    for (auto* k : { &ottDepth, &ottTime, &ottUp, &ottDown }) k->setVisible (! glueMode);
+    for (auto* k : { &glueThresh, &glueRatio, &glueAttack, &glueRelease }) k->setVisible (glueMode);
+
+    auto dim = [] (std::initializer_list<Knob*> knobs, std::initializer_list<Component*> others, bool off)
+    {
+        for (auto* k : knobs) k->setDimmed (off);
+        for (auto* c : others) c->setAlpha (off ? 0.4f : 1.0f);
+    };
+    const bool vocOff = ! vocBlock.isOn();
+    dim ({ &bands, &formant, &attack, &release, &sib, &gate }, {}, vocOff);
+    const int src = roundToInt (raw (carSrc));
+    const bool synthless = src == 4 || vocOff;
+    const int pm = roundToInt (raw (carPitch));
+    note.setDimmed (synthless || pm != 2 || src == 3);
+    glide.setDimmed (synthless || src == 3 || pm == 2);
+    detune.setDimmed (synthless || src == 3);
+    spread.setDimmed (vocOff);
+    noise.setDimmed (vocOff);
+    sourceBox.setAlpha (vocOff ? 0.4f : 1.0f);
+    pitchSeg->setAlpha (vocOff || src == 3 || src == 4 ? 0.4f : 1.0f);
+    const bool harmOff = ! harmBlock.isOn();
+    dim ({ &harmLevel, &harmDetune, &harmSpread }, { &scaleButton, &rootBox, &scaleBox, panSeg.get(), &altButton, &fanButton }, harmOff);
+    rootBox.setAlpha (harmOff || raw (harmScale) < 0.5f ? 0.4f : 1.0f);
+    scaleBox.setAlpha (rootBox.getAlpha());
+    altButton.setAlpha (harmOff ? 0.4f : 1.0f);
+    dim ({ &drive, &crunch, &destroy }, { &dirtModeBox }, ! dirtBlock.isOn());
+    drive.setDimmed (! dirtBlock.isOn() || vocOff);
+    dim ({ &ottDepth, &ottTime, &ottUp, &ottDown, &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix }, { &compModeBox }, ! compBlock.isOn());
+    dim ({ &width, &mono }, { widthSeg.get() }, ! widthBlock.isOn());
+    dim ({ &ceiling }, { clipMode.get() }, ! clipBlock.isOn());
+}
+
+//==============================================================================
+void VoiceFuckerEditor::applyTheme (const Theme& t, bool remember)
+{
+    theme = &t;
+    laf.setTheme (t);
+    if (remember) saveSetting ("theme", t.name);
+    buildBackground();
+    content.sendLookAndFeelChange();
+    for (auto* k : { &note, &glide, &detune, &spread, &noise, &bands, &formant, &attack, &release, &sib, &gate,
+                     &harmLevel, &harmDetune, &harmSpread, &drive, &crunch, &destroy, &ottDepth, &ottTime, &ottUp, &ottDown,
+                     &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix, &width, &mono, &mix, &ceiling,
+                     &inCol.knob, &outCol.knob })
+        k->label.setColour (Label::textColourId, t.mute);
+    welcome.setLang (lang);
+    content.repaint();
+}
+
+void VoiceFuckerEditor::applyHelp()
+{
+    if (helpOn && tooltipWindow == nullptr)
+    {
+        tooltipWindow = std::make_unique<TooltipWindow> (this, 600);
+        tooltipWindow->setLookAndFeel (&laf);
+    }
+    else if (! helpOn)
+        tooltipWindow.reset();
+
+    auto tip = [this] (const char* key) { return helpOn ? Help::tip (key, lang) : String(); };
+    inCol.knob.setTooltip (tip ("input"));
+    outCol.knob.setTooltip (tip ("output"));
+    inCol.setTooltip (tip ("inMeter"));
+    outCol.setTooltip (tip ("outMeter"));
+    presetBar.setTooltip (tip ("presetName"));
+    presetBar.prev.setTooltip (tip ("prev"));
+    presetBar.next.setTooltip (tip ("next"));
+    presetBar.save.setTooltip (tip ("save"));
+    gear.setTooltip (tip ("gear"));
+    for (auto* b : { &dirtBlock, &compBlock, &widthBlock, &clipBlock })
+        if (auto* pw = b->getPowerButton()) pw->setTooltip (tip ("power"));
+    if (auto* pw = vocBlock.getPowerButton()) pw->setTooltip (tip ("vocPower"));
+    if (auto* pw = harmBlock.getPowerButton()) pw->setTooltip (tip ("harmPower"));
+
+    sourceBox.setTooltip (tip ("source"));
+    pitchSeg->setTooltip (tip ("pitch"));
+    note.setTooltip (tip ("note")); glide.setTooltip (tip ("glide")); detune.setTooltip (tip ("detune"));
+    spread.setTooltip (tip ("spread")); noise.setTooltip (tip ("noise"));
+    bands.setTooltip (tip ("bands")); formant.setTooltip (tip ("formant")); attack.setTooltip (tip ("attack"));
+    release.setTooltip (tip ("release")); sib.setTooltip (tip ("sibilance")); gate.setTooltip (tip ("gate"));
+    scaleButton.setTooltip (tip ("scaleOn")); rootBox.setTooltip (tip ("root")); scaleBox.setTooltip (tip ("scale"));
+    panSeg->setTooltip (tip ("panMode")); altButton.setTooltip (tip ("alt")); fanButton.setTooltip (tip ("fan"));
+    harmLevel.setTooltip (tip ("harmLevel")); harmDetune.setTooltip (tip ("harmDetune")); harmSpread.setTooltip (tip ("harmSpread"));
+    strips.setHelp (helpOn, lang);
+    dirtModeBox.setTooltip (tip ("dirtMode"));
+    drive.setTooltip (tip ("drive")); crunch.setTooltip (tip ("crunch")); destroy.setTooltip (tip ("destroy"));
+    compModeBox.setTooltip (tip ("compMode"));
+    ottDepth.setTooltip (tip ("ottDepth")); ottTime.setTooltip (tip ("ottTime")); ottUp.setTooltip (tip ("ottUp")); ottDown.setTooltip (tip ("ottDown"));
+    glueThresh.setTooltip (tip ("glueThresh")); glueRatio.setTooltip (tip ("glueRatio"));
+    glueAttack.setTooltip (tip ("glueAttack")); glueRelease.setTooltip (tip ("glueRelease")); compMix.setTooltip (tip ("compMix"));
+    widthSeg->setTooltip (tip ("widthMode")); width.setTooltip (tip ("width")); mono.setTooltip (tip ("monoBass"));
+    autoGainButton.setTooltip (tip ("autoGain")); mix.setTooltip (tip ("mix"));
+    clipMode->setTooltip (tip ("clipMode")); ceiling.setTooltip (tip ("ceiling"));
+    scope.setHelp (helpOn, lang);
     timerCallback();
 }
 
-void MainPanel::timerCallback()
+void VoiceFuckerEditor::setScale (float s, bool remember)
 {
-    bool changed = false;
-    for (auto& m : modules)
-    {
-        if (m.onParam.isEmpty()) continue;
-        const bool on = proc.apvts.getRawParameterValue (m.onParam)->load() > 0.5f;
-        for (auto* c : m.items)
-        {
-            const float a = on ? 1.f : 0.4f;
-            if (std::abs (c->getAlpha() - a) > 0.01f) { c->setAlpha (a); changed = true; }
-            if (auto* sg = dynamic_cast<ui::Segmented*> (c)) if (sg->active != on) { sg->active = on; sg->repaint(); }
-        }
-    }
-    // Note knob only matters in Fixed pitch mode
-    const bool fixed = (int) proc.apvts.getRawParameterValue ("car_pitch")->load() == 2;
-    if (auto* noteKnob = dynamic_cast<ui::Knob*> (modules[0].items[2]))
-        noteKnob->setAlpha (fixed ? 1.f : 0.4f);
-    if (changed) repaint();
+    scale = s;
+    setSize (roundToInt (baseW * s), roundToInt (baseH * s));
+    if (remember) saveSetting ("scale", String (s, 3));
 }
 
-void MainPanel::paint (juce::Graphics& g)
+void VoiceFuckerEditor::showSettingsMenu()
 {
-    g.drawImage (asphalt, getLocalBounds().toFloat());
-
-    // header
-    drawLogo (g, { 80.f, 7.f, 46.f, 48.f }, juce::Colour (0xff1b191c));
-    g.setColour (juce::Colours::white);
-    drawSpaced (g, "VOICE FUCKER", font (27.f, true), 136.f, 34.f, 2.f);
-    g.setColour (juce::Colour (0xff9a9297));
-    drawSpaced (g, "PRIMAL RAGE LAB", font (9.5f, true), 138.f, 50.f, 4.f);
-
-    // gear
-    auto gr = gearArea.toFloat();
-    g.setColour (juce::Colour (0xff1c1a1d));
-    g.fillRoundedRectangle (gr, 6.f);
-    const auto gc = gr.getCentre();
+    PopupMenu themes, sizes, help, langs, menu;
+    int id = 1;
+    for (const auto& t : Theme::all())
+        themes.addItem (id++, t.name, true, &t == theme);
+    const float scales[] = { 0.75f, 1.0f, 1.25f, 1.5f, 2.0f };
+    for (int i = 0; i < 5; ++i)
+        sizes.addItem (100 + i, String (roundToInt (scales[i] * 100)) + "%", true, std::abs (scale - scales[i]) < 0.01f);
+    help.addItem (200, "On", true, helpOn);
+    help.addItem (201, "Off", true, ! helpOn);
+    langs.addItem (300, "English", true, lang == Help::Lang::en);
+    langs.addItem (301, String::fromUTF8 ("Русский"), true, lang == Help::Lang::ru);
+    menu.addSubMenu ("Theme", themes);
+    menu.addSubMenu ("Size", sizes);
+    menu.addSubMenu ("Help", help);
+    menu.addSubMenu ("Help language", langs);
+    menu.addSeparator();
+    menu.addItem (400, "Start tour");
+    menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&gear), [this, scales] (int r)
     {
-        juce::Path gear;
-        const int teeth = 8;
-        for (int i = 0; i < teeth * 4; ++i)
+        if (r >= 1 && r <= (int) Theme::all().size()) applyTheme (Theme::all()[(size_t) (r - 1)], true);
+        else if (r >= 100 && r < 105) setScale (scales[r - 100], true);
+        else if (r == 200 || r == 201) { helpOn = r == 200; saveSetting ("help", helpOn ? "on" : "off"); applyHelp(); }
+        else if (r == 300 || r == 301)
         {
-            const float a = juce::MathConstants<float>::twoPi * ((float) i / (float) (teeth * 4)) - juce::MathConstants<float>::halfPi;
-            const float r = (i % 4 == 0 || i % 4 == 1) ? 9.5f : 7.2f;
-            const auto pt = juce::Point<float> (gc.x + std::cos (a) * r, gc.y + std::sin (a) * r);
-            if (i == 0) gear.startNewSubPath (pt); else gear.lineTo (pt);
+            lang = r == 301 ? Help::Lang::ru : Help::Lang::en;
+            saveSetting ("helpLang", r == 301 ? "ru" : "en");
+            welcome.setLang (lang);
+            applyHelp();
         }
-        gear.closeSubPath();
-        gear.addEllipse (gc.x - 3.2f, gc.y - 3.2f, 6.4f, 6.4f);
-        gear.setUsingNonZeroWinding (false);
-        g.setColour (col::value);
-        g.fillPath (gear);
-    }
+        else if (r == 400) tour.start (lang);
+    });
+}
 
-    // modules
-    for (auto& m : modules)
+void VoiceFuckerEditor::Content::mouseDown (const MouseEvent& e)
+{
+    if (titleArea.contains (e.getPosition()))
     {
-        auto r = m.r.toFloat();
-        g.setColour (col::panel);
-        g.fillRoundedRectangle (r, 8.f);
-        g.setColour (col::hair);
-        g.drawRoundedRectangle (r.reduced (0.5f), 8.f, 1.f);
-        const bool on = m.onParam.isEmpty() || proc.apvts.getRawParameterValue (m.onParam)->load() > 0.5f;
-        g.setColour (on ? col::text : juce::Colour (0xff6a6267));
-        drawSpaced (g, m.title, font (10.5f, true), r.getX() + (m.onParam.isEmpty() ? 14.f : 30.f), r.getY() + 25.f, 2.5f);
+        editor.about.setVisible (true);
+        editor.about.toFront (false);
     }
-    auto cap = [&] (int mi, const char* t, int dx)
+}
+
+Rectangle<float> VoiceFuckerEditor::tourTarget (const String& name)
+{
+    auto area = [this] (Component& c) { return content.getLocalArea (&c, c.getLocalBounds()).toFloat(); };
+    if (name == "inCol")     return area (inCol);
+    if (name == "outCol")    return area (outCol);
+    if (name == "presets")   return area (presetBar);
+    if (name == "gear")      return area (gear);
+    if (name == "scope")     return area (scope);
+    if (name == "pills")     return content.getLocalArea (&scope, scope.pillsArea()).toFloat();
+    if (name == "noteTag")   return content.getLocalArea (&scope, scope.noteArea().expanded (6, 3)).toFloat();
+    if (name == "carrier")   return area (carrierBlock);
+    if (name == "midi")      return area (sourceBox).getUnion (area (*pitchSeg)).expanded (6.0f);
+    if (name == "vocoder")   return area (vocBlock);
+    if (name == "harmonize") return area (harmBlock);
+    if (name == "harmScale") return area (scaleButton).getUnion (area (scaleBox)).expanded (6.0f);
+    if (name == "dirt")      return area (dirtBlock);
+    if (name == "comp")      return area (compBlock);
+    if (name == "width")     return area (widthBlock);
+    if (name == "mix")       return area (mixBlock);
+    if (name == "clip")      return area (clipBlock);
+    return {};
+}
+
+//==============================================================================
+void VoiceFuckerEditor::buildBackground()
+{
+    const auto& t = *theme;
+    const int s = 2, W = baseW * s, H = baseH * s;
+    background = Image (Image::RGB, W, H, false);
+    if (t.gloss)
     {
-        const auto& m = modules[(size_t) mi];
-        const bool on = m.onParam.isEmpty() || proc.apvts.getRawParameterValue (m.onParam)->load() > 0.5f;
-        drawCaption (g, t, (float) (m.r.getX() + dx), (float) m.r.getY() + 46.f, on ? 1.f : 0.4f);
+        Graphics g (background);
+        ColourGradient bg (Colour (0xff1c1c21), 0.0f, 0.0f, Colour (0xff141418), 0.0f, (float) H, false);
+        bg.addColour (0.45, Colour (0xff0b0b0d));
+        g.setGradientFill (bg);
+        g.fillAll();
+        struct Sheen { float x, w, a; };
+        for (const auto& sh : { Sheen { 0.18f, 0.22f, 0.07f }, Sheen { 0.62f, 0.08f, 0.05f }, Sheen { 0.80f, 0.30f, 0.04f } })
+        {
+            const float x0 = (float) W * sh.x, w0 = (float) W * sh.w;
+            ColourGradient sg (Colours::white.withAlpha (0.0f), x0 - w0, 0.0f, Colours::white.withAlpha (0.0f), x0 + w0, (float) H * 0.3f, false);
+            sg.addColour (0.5, Colour ((uint8) 255, 248, 230, sh.a));
+            g.setGradientFill (sg);
+            Path p;
+            p.startNewSubPath (x0 - w0, 0.0f); p.lineTo (x0 + w0, 0.0f);
+            p.lineTo (x0 + w0 - (float) W * 0.25f, (float) H); p.lineTo (x0 - w0 - (float) W * 0.25f, (float) H);
+            p.closeSubPath();
+            g.fillPath (p);
+        }
+        return;
+    }
+    Random rnd (1234);
+    constexpr int gw = 30, gh = 22;
+    float coarse[gw * gh];
+    for (auto& v : coarse) v = rnd.nextFloat() * 14.0f - 7.0f;
+    {
+        Image::BitmapData bd (background, Image::BitmapData::writeOnly);
+        const float br = t.bg.getFloatRed() * 255.0f, bgc = t.bg.getFloatGreen() * 255.0f, bb = t.bg.getFloatBlue() * 255.0f;
+        auto ch = [] (float f) { return (uint8) jlimit (0, 255, roundToInt (f)); };
+        for (int y = 0; y < H; ++y)
+        {
+            const float fy = (float) y / (float) (H - 1) * (gh - 1);
+            const int y0 = jmin (gh - 2, (int) fy);
+            const float ty = fy - (float) y0;
+            for (int x = 0; x < W; ++x)
+            {
+                const float fx = (float) x / (float) (W - 1) * (gw - 1);
+                const int x0 = jmin (gw - 2, (int) fx);
+                const float tx = fx - (float) x0;
+                const float c = coarse[y0 * gw + x0] * (1 - tx) * (1 - ty) + coarse[y0 * gw + x0 + 1] * tx * (1 - ty)
+                              + coarse[(y0 + 1) * gw + x0] * (1 - tx) * ty + coarse[(y0 + 1) * gw + x0 + 1] * tx * ty;
+                const float nz = c + (rnd.nextFloat() - 0.5f) * 30.0f;
+                if (rnd.nextFloat() < 0.004f) bd.setPixelColour (x, y, t.bg.interpolatedWith (t.speck, 0.4f + rnd.nextFloat() * 0.6f));
+                else bd.setPixelColour (x, y, Colour (ch (br + nz), ch (bgc + nz), ch (bb + nz * 1.1f)));
+            }
+        }
+    }
+    Graphics g (background);
+    ColourGradient sheen (Colour (0xffb4c4dc).withAlpha (t.lightBg ? 0.10f : 0.06f), (float) W * 0.7f, (float) H * 0.12f,
+                          Colours::transparentWhite, (float) W * 1.05f, (float) H * 0.12f, true);
+    g.setGradientFill (sheen);
+    g.fillEllipse ((float) W * 0.35f, 0.0f, (float) W * 0.7f, (float) H * 0.3f);
+    ColourGradient vig (Colours::transparentBlack, (float) W * 0.5f, (float) H * 0.45f, t.vignette, 0.0f, 0.0f, true);
+    g.setGradientFill (vig);
+    g.fillRect (0, 0, W, H);
+}
+
+void VoiceFuckerEditor::paintContent (Graphics& g)
+{
+    const auto& t = *theme;
+    g.drawImage (background, Rectangle<float> (0.0f, 0.0f, (float) baseW, (float) baseH));
+    const auto la = logoArea.toFloat();
+    if (t.gloss)
+    {
+        ColourGradient gold (Colour (0xfff6dc9a), la.getX(), la.getY(), Colour (0xffa47a2c), la.getX(), la.getBottom(), false);
+        gold.addColour (0.55, Colour (0xffe8c46a));
+        Logo::draw (g, la, FillType (gold));
+    }
+    else
+        Logo::draw (g, la, FillType (t.logo));
+    g.setColour (t.ink);
+    g.setFont (uiFont (30.0f, true, 0.08f));
+    g.drawText ("VOICE FUCKER", logoArea.getRight() + 12, 12, 360, 34, Justification::centredLeft);
+    g.setColour (t.mute);
+    g.setFont (uiFont (11.0f, true, 0.3f));
+    g.drawText ("PRIMAL RAGE LAB", logoArea.getRight() + 14, 46, 320, 16, Justification::centredLeft);
+
+    // signal path arrows in the bottom row
+    auto arrow = [&] (const Component& a, const Component& b)
+    {
+        const float x0 = (float) a.getRight(), x1 = (float) b.getX();
+        if (x1 - x0 < 8.0f) return;
+        const float cx = 0.5f * (x0 + x1), cy = (float) a.getBounds().getCentreY();
+        const float half = jmin (7.0f, (x1 - x0) * 0.35f);
+        Path p;
+        p.startNewSubPath (cx - half, cy); p.lineTo (cx + half, cy);
+        p.startNewSubPath (cx + half - 4.0f, cy - 4.0f); p.lineTo (cx + half, cy); p.lineTo (cx + half - 4.0f, cy + 4.0f);
+        g.setColour (t.accent.withAlpha (0.65f));
+        g.strokePath (p, PathStrokeType (2.0f, PathStrokeType::curved, PathStrokeType::rounded));
     };
-    cap (0, "Source", 14); cap (0, "Pitch", 142);
-    cap (2, "Mode", 14); cap (3, "Mode", 12); cap (4, "Gain", 12); cap (5, "Shape", 14);
-}
-
-void MainPanel::mouseDown (const juce::MouseEvent& e)
-{
-    if (gearArea.contains (e.getPosition())) showSettings();
-}
-
-void MainPanel::showSettings()
-{
-    juce::PopupMenu m;
-    m.addSectionHeader ("Window size");
-    const float sizes[] = { 0.7f, 0.8f, 0.9f, 1.0f, 1.15f, 1.3f, 1.5f };
-    for (int i = 0; i < 7; ++i)
-        m.addItem (i + 1, juce::String (juce::roundToInt (sizes[i] * 100.f)) + " %", true, std::abs (proc.uiScale - sizes[i]) < 0.01f);
-    m.addSeparator();
-    m.addItem (100, "Voice Fucker 1.0  -  Primal Rage Lab", false, false);
-    juce::Component::SafePointer<MainPanel> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (gearArea)),
-                     [safe, sizes] (int r)
-                     {
-                         if (safe != nullptr && r >= 1 && r <= 7) safe->editor.setScale (sizes[r - 1]);
-                     });
-}
-
-//==============================================================================
-// Editor
-//==============================================================================
-VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), content (p, *this)
-{
-    setLookAndFeel (&look);
-    addAndMakeVisible (content);
-    content.setBounds (0, 0, MainPanel::W, MainPanel::H);
-    setResizable (true, true);
-    setResizeLimits (juce::roundToInt (MainPanel::W * 0.6), juce::roundToInt (MainPanel::H * 0.6), MainPanel::W * 2, MainPanel::H * 2);
-    if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) MainPanel::W / (double) MainPanel::H);
-    const float s = proc.uiScale;
-    setSize (juce::roundToInt ((float) MainPanel::W * s), juce::roundToInt ((float) MainPanel::H * s));
-}
-
-VoiceFuckerEditor::~VoiceFuckerEditor() { setLookAndFeel (nullptr); }
-
-void VoiceFuckerEditor::paint (juce::Graphics& g) { g.fillAll (juce::Colour (0xff1a181b)); }
-
-void VoiceFuckerEditor::resized()
-{
-    const float s = (float) getWidth() / (float) MainPanel::W;
-    content.setTransform (juce::AffineTransform::scale (s));
-    proc.uiScale = s;
-}
-
-void VoiceFuckerEditor::setScale (float s)
-{
-    setSize (juce::roundToInt ((float) MainPanel::W * s), juce::roundToInt ((float) MainPanel::H * s));
+    arrow (carrierBlock, vocBlock);
+    const Component* row3[5] = { &dirtBlock, &compBlock, &widthBlock, &mixBlock, &clipBlock };
+    for (int i = 0; i < 4; ++i) arrow (*row3[i], *row3[i + 1]);
 }
