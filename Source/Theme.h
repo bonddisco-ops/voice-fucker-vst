@@ -15,6 +15,15 @@ struct Theme
         return accentDim.interpolatedWith (accentHi, t).withAlpha ((0.45f + 0.55f * t) * alpha);
     }
 
+    // compressor marks on the screen: a colour that stands out from the accent of each theme
+    juce::Colour comp() const
+    {
+        if (name == "Mango")       return juce::Colour (0xffb04cff);
+        if (name == "Ultraviolet") return juce::Colour (0xff4cf0c0);
+        if (name == "Luxe")        return juce::Colour (0xfffff2c8);
+        return juce::Colour (0xffffd84a);   // yellow
+    }
+
     static const std::vector<Theme>& all()
     {
         using C = juce::Colour;

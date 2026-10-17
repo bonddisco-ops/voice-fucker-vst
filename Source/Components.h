@@ -202,6 +202,11 @@ private:
     void paintWave (juce::Graphics&, const Theme&);
     void paintBands (juce::Graphics&, const Theme&);
     void paintEq (juce::Graphics&, const Theme&);
+    void paintGlue (juce::Graphics&, const Theme&);   // threshold, ratio and gain reduction over the wave
+    void paintOtt (juce::Graphics&, const Theme&);    // three OTT bands instead of the EQ
+    bool glueShown() const;
+    bool ottShown() const;
+    void updateTopControls();
     void updateSpectrum();
     void updateTooltip();
     juce::String noteText() const;
@@ -228,6 +233,8 @@ private:
     Help::Lang lang = Help::Lang::en;
 
     float ampZoom = 1.0f;
+    int lastCompState = -1;                    // comp off / OTT / Glue: the screen follows changes
+    float glueGrUi = 0.0f, glueInUi = -100.0f, ottGainUi[3] {}, ottLevelUi[3] { -100.0f, -100.0f, -100.0f };
     int barsIndex = 1;
     std::array<float, VoiceFuckerProcessor::maxBands> bandsUi {}, bandsHold {};
 

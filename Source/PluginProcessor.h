@@ -77,6 +77,13 @@ public:
     std::atomic<float> uiAutoHz { 0 };
     std::array<std::atomic<int>, Tables::numIntervals> uiInterval;   // interval that really sounds
 
+    // compressor display: Glue gain reduction and its input level, OTT gain (+ up / - down) and level per band
+    std::atomic<float> uiGlueGr { 0 }, uiGlueIn { -100 };
+    std::array<std::atomic<float>, 3> uiOttGain, uiOttLevel;
+
+    // editor size, kept with the plugin instance so reopening the window keeps it
+    std::atomic<int> editorW { 0 }, editorH { 0 };
+
 private:
     struct Voice
     {

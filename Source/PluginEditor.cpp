@@ -396,13 +396,22 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     applyTheme (Theme::byName (loadSetting ("theme", "Asphalt")), false);
     welcome.setLang (lang);
     applyHelp();
-    scale = jlimit (0.6f, 2.0f, loadSetting ("scale", "1.0").getFloatValue());
-
+    // size: this plugin instance first, then the last size used anywhere, then 100 %
+    int w = proc.editorW.load(), h = proc.editorH.load();
+    if (w <= 0 || h <= 0)
+    {
+        w = loadSetting ("width", "0").getIntValue();
+        h = loadSetting ("height", "0").getIntValue();
+    }
+    if (w <= 0 || h <= 0)
+    {
+        const float sc = jlimit (0.6f, 2.0f, loadSetting ("scale", "1.0").getFloatValue());
+        w = roundToInt (baseW * sc); h = roundToInt (baseH * sc);
+    }
     setResizable (true, true);
-    setResizeLimits ((int) (baseW * 0.6f), (int) (baseH * 0.6f), baseW * 2, baseH * 2);
-    if (auto* c = getConstrainer())
-        c->setFixedAspectRatio ((double) baseW / (double) baseH);
-    setSize (roundToInt (baseW * scale), roundToInt (baseH * scale));
+    setResizeLimits ((int) (baseW * 0.55f), (int) (baseH * 0.55f), baseW * 3, baseH * 3);   // any shape
+    setSize (jlimit ((int) (baseW * 0.55f), baseW * 3, w), jlimit ((int) (baseH * 0.55f), baseH * 3, h));
+    sizeReady = true;
 
     if (loadSetting ("tour", "") != "never" && ! askedThisRun)
     {
@@ -416,7 +425,6 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
 VoiceFuckerEditor::~VoiceFuckerEditor()
 {
     stopTimer();
-    saveSetting ("scale", String (scale, 3));
     tooltipWindow.reset();
     setLookAndFeel (nullptr);
 }
@@ -424,28 +432,41 @@ VoiceFuckerEditor::~VoiceFuckerEditor()
 //==============================================================================
 void VoiceFuckerEditor::resized()
 {
-    scale = (float) getWidth() / (float) baseW;
+    if (getWidth() < 10 || getHeight() < 10) return;
+    // uniform scale (knobs never stretch); the extra room of a wider or taller window goes to the screen and the gaps
+    scale = jmin ((float) getWidth() / (float) baseW, (float) getHeight() / (float) baseH);
+    logicalW = jmax (baseW, roundToInt ((float) getWidth() / scale));
+    logicalH = jmax (baseH, roundToInt ((float) getHeight() / scale));
     content.setTransform (AffineTransform::scale (scale));
-    content.setBounds (0, 0, baseW, baseH);
+    content.setBounds (0, 0, logicalW, logicalH);
+    if (sizeReady)
+    {
+        proc.editorW = getWidth(); proc.editorH = getHeight();
+        saveSetting ("width", String (getWidth()));
+        saveSetting ("height", String (getHeight()));
+    }
 
-    presetBar.setBounds (466, 24, 330, 30);
-    gear.setBounds (X1 - 40, 24, 40, 30);
-    scope.setBounds (X0, scopeY, X1 - X0, scopeH);
-    inCol.setBounds (10, 10, 72, baseH - 20);
-    outCol.setBounds (baseW - 82, 10, 72, baseH - 20);
-    about.setBounds (0, 0, baseW, baseH);
-    tour.setBounds (0, 0, baseW, baseH);
-    welcome.setBounds (0, 0, baseW, baseH);
+    const int dx = logicalW - baseW, dy = logicalH - baseH, x1 = X1 + dx;
+    presetBar.setBounds (466 + dx / 2, 24, 330, 30);
+    gear.setBounds (x1 - 40, 24, 40, 30);
+    scope.setBounds (X0, scopeY, x1 - X0, scopeH + dy);
+    inCol.setBounds (10, 10, 72, logicalH - 20);
+    outCol.setBounds (logicalW - 82, 10, 72, logicalH - 20);
+    about.setBounds (0, 0, logicalW, logicalH);
+    tour.setBounds (0, 0, logicalW, logicalH);
+    welcome.setBounds (0, 0, logicalW, logicalH);
 
-    carrierBlock.setBounds (X0, row1Y, carrierW, row1H);
-    vocBlock.setBounds (X1 - vocW, row1Y, vocW, row1H);
-    harmBlock.setBounds (X0, harmY, X1 - X0, harmH);
+    carrierBlock.setBounds (X0, row1Y + dy, carrierW + dx / 2, row1H);
+    vocBlock.setBounds (x1 - vocW - dx / 2, row1Y + dy, vocW + dx / 2, row1H);
+    harmBlock.setBounds (X0, harmY + dy, x1 - X0, harmH);
     int x = X0;
+    const int gap = row3Gap + dx / 4;
     for (auto [blk, w] : { std::pair<Block*, int> { &dirtBlock, dirtW }, { &compBlock, compW }, { &widthBlock, widthW }, { &mixBlock, mixW }, { &clipBlock, clipW } })
     {
-        blk->setBounds (x, row3Y, w, row3H);
-        x += w + row3Gap;
+        blk->setBounds (x, row3Y + dy, w, row3H);
+        x += w + gap;
     }
+    if (dx > 0) clipBlock.setBounds (x1 - clipW, row3Y + dy, clipW, row3H);
 
     // Carrier / Vocoder
     sourceBox.setBounds (14, 32, 140, 24);
@@ -588,7 +609,6 @@ void VoiceFuckerEditor::applyHelp()
 
 void VoiceFuckerEditor::setScale (float s, bool remember)
 {
-    scale = s;
     setSize (roundToInt (baseW * s), roundToInt (baseH * s));
     if (remember) saveSetting ("scale", String (s, 3));
 }
@@ -727,7 +747,7 @@ void VoiceFuckerEditor::buildBackground()
 void VoiceFuckerEditor::paintContent (Graphics& g)
 {
     const auto& t = *theme;
-    g.drawImage (background, Rectangle<float> (0.0f, 0.0f, (float) baseW, (float) baseH));
+    g.drawImage (background, Rectangle<float> (0.0f, 0.0f, (float) logicalW, (float) logicalH));
     const auto la = logoArea.toFloat();
     if (t.gloss)
     {

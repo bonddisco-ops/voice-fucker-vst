@@ -240,16 +240,21 @@ int main (int argc, char** argv)
             }
         };
         feed ((int) (sr * 1.5) / block, (int) sr);
-        struct Shot { const char* name; const char* theme; int view; int tour; bool ceiling; };
+        struct Shot { const char* name; const char* theme; int view; int tour; bool ceiling; int comp = -1; int w = 0, h = 0; };
         const Shot shots[] = { { "ui_wave", "Asphalt", 0, -1, false }, { "ui_spectrum", "Asphalt", 1, -1, false }, { "ui_eq", "Asphalt", 2, -1, false },
                                { "ui_ceiling", "Asphalt", 0, -1, true }, { "ui_mango", "Mango", 1, -1, false }, { "ui_luxe", "Luxe", 0, -1, false },
                                { "ui_rage", "Rage", 0, -1, false }, { "ui_ultra", "Ultraviolet", 1, -1, false }, { "ui_tour", "Asphalt", 0, 10, false },
-                               { "ui_welcome", "Asphalt", 0, -2, false } };
+                               { "ui_welcome", "Asphalt", 0, -2, false },
+                               { "ui_glue", "Asphalt", 0, -1, false, 1 }, { "ui_ott", "Asphalt", 2, -1, false, 0 },
+                               { "ui_ott_mango", "Mango", 2, -1, false, 0 }, { "ui_wide", "Asphalt", 0, -1, false, -1, 1500, 760 },
+                               { "ui_tall", "Rage", 1, -1, false, -1, 900, 1000 } };
         for (auto& sh : shots)
         {
             std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
             auto* ed = dynamic_cast<VoiceFuckerEditor*> (base.get());
-            ed->setSize (VoiceFuckerEditor::baseW, VoiceFuckerEditor::baseH);
+            setP (p, "comp_on", 1); setP (p, "comp_mode", sh.comp == 1 ? 1 : 0);
+            if (sh.comp == 1) setP (p, "glue_thresh", -30);
+            ed->setSize (sh.w > 0 ? sh.w : VoiceFuckerEditor::baseW, sh.h > 0 ? sh.h : VoiceFuckerEditor::baseH);
             ed->hideOverlays();
             ed->setThemeByName (sh.theme);
             ed->getScope().setView ((ScopeView::View) sh.view);

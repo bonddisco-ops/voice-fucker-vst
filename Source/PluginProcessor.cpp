@@ -240,6 +240,8 @@ VoiceFuckerProcessor::VoiceFuckerProcessor()
     bindFilter (postP, true);
     for (auto& b : bandLevel) b.store (0.f);
     for (auto& n : uiNotes) n.store (-1);
+    for (auto& v : uiOttGain) v.store (0.f);
+    for (auto& v : uiOttLevel) v.store (-100.f);
 }
 
 void VoiceFuckerProcessor::bindFilter (FilterParams& f, bool post)
@@ -567,6 +569,7 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
     const float dcR = 1.f - 2.f * vf::pi * 12.f / fs;
 
     float peakIn[2] = { 0, 0 }, peakOut[2] = { 0, 0 };
+    float glueGrMin = 0, glueInMax = -100, ottG[3] {}, ottLvl[3] = { -100, -100, -100 };
     std::array<float, maxBands> bandPk {};
 
     auto midiIt = midi.cbegin();
@@ -820,6 +823,18 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                 float y[2] = { wL, wR };
                 if (compModeV == 0) { y[0] = ott.process (0, wL, depth, ottUpV, ottDownV); y[1] = ott.process (1, wR, depth, ottUpV, ottDownV); }
                 else glue.process (y, 2, glueThr, glueRat);
+                if (compModeV == 0)
+                    for (int b = 0; b < 3; ++b)
+                    {
+                        const float gdb = 0.5f * (ott.gdb[0][b] + ott.gdb[1][b]) * depth;
+                        if (std::abs (gdb) > std::abs (ottG[b])) ottG[b] = gdb;
+                        ottLvl[b] = std::max (ottLvl[b], cdsp::gainToDb (std::max (ott.env[0][b], ott.env[1][b])));
+                    }
+                else
+                {
+                    glueGrMin = std::min (glueGrMin, glue.grDb);
+                    glueInMax = std::max (glueInMax, cdsp::gainToDb (glue.env));
+                }
                 agComp.measure (0, wL, y[0]); agComp.measure (1, wR, y[1]);
                 agComp.update (true, 2);
                 wL += (y[0] * agComp.gain - wL) * cMix * cOn;
@@ -963,6 +978,13 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         if (note >= 0) lowest = std::min (lowest, note);
     }
     uiAutoHz = detectedHz;
+    uiGlueGr = std::min (uiGlueGr.load(), glueGrMin);
+    uiGlueIn = std::max (uiGlueIn.load(), glueInMax);
+    for (int b = 0; b < 3; ++b)
+    {
+        if (std::abs (ottG[b]) > std::abs (uiOttGain[(size_t) b].load())) uiOttGain[(size_t) b] = ottG[b];
+        uiOttLevel[(size_t) b] = std::max (uiOttLevel[(size_t) b].load(), ottLvl[b]);
+    }
     ignoreUnused (lowest);
     for (int j = 0; j < Tables::numIntervals; ++j)
         uiInterval[(size_t) j] = Tables::snapInterval (Tables::intervals[j], *pScale > 0.5f, (int) *pRoot, (int) *pMode);
@@ -975,6 +997,7 @@ void VoiceFuckerProcessor::getStateInformation (MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("presetName", presets.getCurrentName(), nullptr);
+    if (editorW > 0) { state.setProperty ("uiW", editorW.load(), nullptr); state.setProperty ("uiH", editorH.load(), nullptr); }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -987,6 +1010,7 @@ void VoiceFuckerProcessor::setStateInformation (const void* data, int sizeInByte
             Params::upgradeState (tree);
             apvts.replaceState (tree);
             presets.setCurrentNameFromState (tree.getProperty ("presetName", "Init").toString());
+            if ((int) tree.getProperty ("uiW", 0) > 0) { editorW = (int) tree.getProperty ("uiW"); editorH = (int) tree.getProperty ("uiH"); }
         }
 }
 

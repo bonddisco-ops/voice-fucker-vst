@@ -98,6 +98,8 @@ private:
     Content content { *this };
     juce::Image background;
     float scale = 1.0f;
+    int logicalW = baseW, logicalH = baseH;   // layout size: one side is the base, the other grows with the window shape
+    bool sizeReady = false;
     bool helpOn = true;
     Help::Lang lang = Help::Lang::en;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow;
