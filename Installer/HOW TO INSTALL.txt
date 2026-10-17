@@ -32,10 +32,10 @@ MAC
 КАК ПОДАВАТЬ СИГНАЛ
  - Плагин ставится на дорожку с вокалом.
  - Pitch = Auto: ничего не нужно, робот поёт твою мелодию.
- - Pitch = MIDI: в Bitwig поставь перед плагином Note Receiver и выбери дорожку с нотами.
+ - Pitch = MIDI: в своей DAW направь MIDI-дорожку с нотами на плагин.
    В Ableton на MIDI-дорожке в "MIDI To" выбери дорожку с вокалом / Voice Fucker.
  - Source = Sidechain: заведи синт во вход сайдчейна плагина
-   (в Bitwig - выбор сайдчейна в заголовке плагина).
+   (сайдчейн выбирается в настройках плагина в DAW).
 
 ---------------------------------------------------------------
 ENGLISH
@@ -59,5 +59,5 @@ MAC
 
 FEEDING IT
  - Put it on your vocal track. Pitch = Auto needs nothing.
- - Pitch = MIDI: Bitwig - Note Receiver before the plugin. Ableton - "MIDI To" on the MIDI track.
+ - Pitch = MIDI: route the MIDI track with notes to the plugin in your DAW.
  - Source = Sidechain: route a synth into the plugin's sidechain input.
