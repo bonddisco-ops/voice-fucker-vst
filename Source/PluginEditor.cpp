@@ -357,6 +357,14 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     clipMode = std::make_unique<Segmented> (*apvts.getParameter (ParamIDs::clipMode), Tables::clipModes, true);
     clipBlock.addAndMakeVisible (*clipMode);
     ceiling.init (clipBlock, apvts, "Ceiling", ParamIDs::ceiling, true);
+    for (auto* k : { &glueThresh, &glueRatio, &glueAttack, &glueRelease, &ottDepth, &ottTime, &ottUp, &ottDown })
+    {
+        const int kind = (k == &ottDepth || k == &ottTime || k == &ottUp || k == &ottDown) ? 2 : 1;
+        auto* sl = &k->slider;
+        sl->onDragStart = [this, kind] { scope.touchComp (kind, true); };
+        sl->onDragEnd = [this, kind] { scope.touchComp (kind, false); };
+        sl->onValueChange = [this, kind, sl] { if (sl->isMouseOverOrDragging()) scope.touchComp (kind, sl->isMouseButtonDown()); };
+    }
     ceiling.slider.onDragStart = [this] { scope.touchCeiling (true); };
     ceiling.slider.onDragEnd = [this] { scope.touchCeiling (false); };
     ceiling.slider.onValueChange = [this] { if (ceiling.slider.isMouseOverOrDragging()) scope.touchCeiling (ceiling.slider.isMouseButtonDown()); };
@@ -469,23 +477,29 @@ void VoiceFuckerEditor::resized()
     if (dx > 0) clipBlock.setBounds (x1 - clipW, row3Y + dy, clipW, row3H);
 
     // Carrier / Vocoder
-    sourceBox.setBounds (14, 32, 140, 24);
-    pitchSeg->setBounds (164, 32, 250, 24);
-    Knob* car[5] = { &note, &glide, &detune, &spread, &noise };
-    for (int i = 0; i < 5; ++i) car[i]->setBounds (14 + i * 80, 62, 80);
-    Knob* voc[6] = { &bands, &formant, &attack, &release, &sib, &gate };
-    for (int i = 0; i < 6; ++i) voc[i]->setBounds (14 + i * 80, 62, 80);
+    // knobs spread evenly over the width a block has (wider window -> more air between them)
+    auto spreadKnobs = [] (std::initializer_list<Knob*> knobs, int x0, int width, int y, int kw)
+    {
+        const int n = (int) knobs.size();
+        const float step = (float) (width - kw) / (float) jmax (1, n - 1);
+        int i = 0;
+        for (auto* k : knobs) k->setBounds (x0 + roundToInt (step * (float) i++), y, kw);
+    };
+    const int carW = carrierBlock.getWidth(), vW = vocBlock.getWidth();
+    sourceBox.setBounds (14, 32, 140 + (carW - carrierW) / 3, 24);
+    pitchSeg->setBounds (sourceBox.getRight() + 10, 32, carW - 14 - sourceBox.getRight() - 10, 24);
+    spreadKnobs ({ &note, &glide, &detune, &spread, &noise }, 14, carW - 28 - (carrierW - 28 - 400), 62, 80);
+    spreadKnobs ({ &bands, &formant, &attack, &release, &sib, &gate }, 14, 480 + (vW - vocW), 62, 80);
 
-    // Harmonize
-    strips.setBounds (10, 30, 600, harmH - 36);
-    scaleButton.setBounds (628, 32, 76, 24);
-    rootBox.setBounds (708, 32, 66, 24);
-    scaleBox.setBounds (780, 32, 176, 24);
-    panSeg->setBounds (628, 66, 328, 24);
-    harmDry.setBounds (634, 98, 58);
-    harmWet.setBounds (716, 98, 58);
-    harmDetune.setBounds (816, 98, 58);
-    harmSpread.setBounds (898, 98, 58);
+    // Harmonize: the faders keep their spacing, the extra room is shared out
+    const int hx = (harmBlock.getWidth() - (X1 - X0)) / 2;
+    strips.setBounds (10 + hx / 2, 30, 600, harmH - 36);
+    const int rx = 628 + hx, rw = 328 + hx;
+    scaleButton.setBounds (rx, 32, 76, 24);
+    rootBox.setBounds (rx + 80, 32, 66, 24);
+    scaleBox.setBounds (rx + 152, 32, rw - 152, 24);
+    panSeg->setBounds (rx, 66, rw, 24);
+    spreadKnobs ({ &harmDry, &harmWet, &harmDetune, &harmSpread }, rx + 6, rw - 12, 98, 58);
 
     // Row 3
     const int cy = 32, ky = 60;

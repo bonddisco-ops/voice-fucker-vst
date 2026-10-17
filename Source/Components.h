@@ -179,6 +179,7 @@ public:
     View getView() const { return view; }
     void selectFilter (bool post);
     void touchCeiling (bool dragging);
+    void touchComp (int kind, bool dragging);   // 1 Glue, 2 OTT: shown while its knobs are turned, then fades
     void setHelp (bool enabled, Help::Lang);
     void setBarsIndex (int i);
     int getBarsIndex() const { return barsIndex; }
@@ -233,7 +234,10 @@ private:
     Help::Lang lang = Help::Lang::en;
 
     float ampZoom = 1.0f;
-    int lastCompState = -1;                    // comp off / OTT / Glue: the screen follows changes
+    int compKind = 0;
+    bool compDragging = false;
+    double compTouchMs = -1.0e9;
+    float compAlpha() const;
     float glueGrUi = 0.0f, glueInUi = -100.0f, ottGainUi[3] {}, ottLevelUi[3] { -100.0f, -100.0f, -100.0f };
     int barsIndex = 1;
     std::array<float, VoiceFuckerProcessor::maxBands> bandsUi {}, bandsHold {};

@@ -261,6 +261,7 @@ int main (int argc, char** argv)
             if (sh.tour >= 0) ed->startTour (sh.tour);
             if (sh.tour == -2) ed->showWelcome();
             if (sh.ceiling) ed->touchCeiling();
+            if (sh.comp >= 0) ed->touchComp (sh.comp == 1 ? 1 : 2);
             for (int i = 0; i < 8; ++i) { feed (6, (int) sr + i * block * 6); ed->getScope().advanceFrames (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); }
             auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
             juce::PNGImageFormat png;

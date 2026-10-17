@@ -799,7 +799,7 @@ void ScopeView::setBarsIndex (int i)
 void ScopeView::timerCallback()
 {
     const double now = Time::getMillisecondCounterHiRes();
-    if (tempWave && ! ceilingDragging && now - ceilingTouchMs > 2000.0)
+    if (tempWave && ! ceilingDragging && ! compDragging && now - ceilingTouchMs > 2000.0 && now - compTouchMs > 2100.0)
     {
         tempWave = false;
         view = viewBeforeCeiling;
@@ -821,45 +821,57 @@ void ScopeView::timerCallback()
 
     // compressor: follow its mode (Glue -> WAVE, OTT -> EQ screen) when it is switched, and animate its meters
     {
-        auto rawv = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
-        const int st = rawv (ParamIDs::compOn) < 0.5f ? 0 : (roundToInt (rawv (ParamIDs::compMode)) == 1 ? 2 : 1);
-        if (lastCompState >= 0 && st != lastCompState && st != 0)
-            setView (st == 2 ? View::wave : View::eq);
-        lastCompState = st;
-        const float gr = proc.uiGlueGr.exchange (0.0f), in = proc.uiGlueIn.exchange (-100.0f);
-        glueGrUi = gr < glueGrUi ? gr : glueGrUi + (gr - glueGrUi) * 0.18f;
-        glueInUi = in > glueInUi ? in : glueInUi + (in - glueInUi) * 0.15f;
+            const float gr = proc.uiGlueGr.exchange (0.0f), in = proc.uiGlueIn.exchange (-100.0f);
+        // calm motion at 60 fps: fast enough to follow, slow enough not to flicker
+        glueGrUi += (gr - glueGrUi) * (gr < glueGrUi ? 0.25f : 0.06f);
+        glueInUi += (jmax (-60.0f, in) - glueInUi) * (in > glueInUi ? 0.2f : 0.06f);
         for (int b = 0; b < 3; ++b)
         {
             const float gv = proc.uiOttGain[(size_t) b].exchange (0.0f), lv = proc.uiOttLevel[(size_t) b].exchange (-100.0f);
-            ottGainUi[b] += (gv - ottGainUi[b]) * (std::abs (gv) > std::abs (ottGainUi[b]) ? 0.6f : 0.15f);
-            ottLevelUi[b] = lv > ottLevelUi[b] ? lv : ottLevelUi[b] + (lv - ottLevelUi[b]) * 0.15f;
+            ottGainUi[b] += (gv - ottGainUi[b]) * 0.05f;
+            ottLevelUi[b] += (jmax (-72.0f, lv) - ottLevelUi[b]) * 0.07f;
         }
         updateTopControls();
     }
     repaint();
 }
 
-bool ScopeView::glueShown() const
+float ScopeView::compAlpha() const
 {
-    auto rawv = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
-    return view == View::wave && rawv (ParamIDs::compOn) > 0.5f && roundToInt (rawv (ParamIDs::compMode)) == 1;
+    if (compDragging) return 1.0f;
+    const double since = Time::getMillisecondCounterHiRes() - compTouchMs;
+    const float a = (float) jlimit (0.0, 1.0, 1.0 - (since - 1200.0) / 900.0);
+    return a * a * (3.0f - 2.0f * a);   // smooth fade
 }
 
-bool ScopeView::ottShown() const
+bool ScopeView::glueShown() const { return compKind == 1 && view == View::wave && compAlpha() > 0.0f; }
+bool ScopeView::ottShown() const  { return compKind == 2 && compAlpha() > 0.0f; }
+
+void ScopeView::touchComp (int kind, bool dragging)
 {
-    auto rawv = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
-    return view == View::eq && rawv (ParamIDs::compOn) > 0.5f && roundToInt (rawv (ParamIDs::compMode)) == 0;
+    compKind = kind;
+    compDragging = dragging;
+    compTouchMs = Time::getMillisecondCounterHiRes();
+    if (kind == 1 && view != View::wave)
+    {
+        viewBeforeCeiling = view;
+        tempWave = true;
+        view = View::wave;
+        viewSwitch.view = 0;
+        viewSwitch.repaint();
+    }
 }
 
 void ScopeView::updateTopControls()
 {
-    // in the OTT screen the filters step aside
-    const bool ott = ottShown();
-    prePill.setVisible (! ott);
-    postPill.setVisible (! ott);
-    preTarget->setVisible (! ott && ! postSelected);
-    postTarget->setVisible (! ott && postSelected);
+    // while the OTT picture is up the filter controls step aside
+    const float a = ottShown() ? compAlpha() : 0.0f;
+    for (Component* c : { (Component*) &prePill, (Component*) &postPill, (Component*) preTarget.get(), (Component*) postTarget.get() })
+        c->setAlpha (1.0f - a);
+    prePill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
+    postPill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
+    preTarget->setVisible (! postSelected);
+    postTarget->setVisible (postSelected);
 }
 
 void ScopeView::updateSpectrum()
@@ -1105,10 +1117,23 @@ void ScopeView::paint (Graphics& g)
                 g.fillRect (s.getX(), y, s.getWidth(), 1.0f);
             }
 
-        if (view == View::wave) { paintWave (g, t); if (glueShown()) paintGlue (g, t); }
+        if (view == View::wave) paintWave (g, t);
         else if (view == View::spectrum) paintBands (g, t);
-        else if (ottShown()) paintOtt (g, t);
         else paintEq (g, t);
+        if (glueShown())
+        {
+            g.beginTransparencyLayer (compAlpha());
+            paintGlue (g, t);
+            g.endTransparencyLayer();
+        }
+        if (ottShown())
+        {
+            g.beginTransparencyLayer (compAlpha());
+            g.setColour (Colour (0xf20a0a0d));
+            g.fillRect (s);
+            paintOtt (g, t);
+            g.endTransparencyLayer();
+        }
 
         ColourGradient refl (Colours::white.withAlpha (t.gloss ? 0.18f : 0.08f), 0.0f, s.getY(), Colours::white.withAlpha (0.0f), 0.0f, s.getY() + s.getHeight() * 0.4f, false);
         g.setGradientFill (refl);
@@ -1136,7 +1161,9 @@ void ScopeView::paint (Graphics& g)
 
     // Backings behind the top controls
     g.setColour (Colour ((uint8) 10, 10, 12, 0.8f));
-    if (! ottShown()) g.fillRoundedRectangle (pillsArea().toFloat(), 8.0f);
+    g.setColour (Colour ((uint8) 10, 10, 12, 0.8f * (1.0f - (ottShown() ? compAlpha() : 0.0f))));
+    g.fillRoundedRectangle (pillsArea().toFloat(), 8.0f);
+    g.setColour (Colour ((uint8) 10, 10, 12, 0.8f));
     g.fillRoundedRectangle (viewSwitch.getBounds().toFloat().expanded (6.0f, 5.0f), 8.0f);
 
     // Pitch readout
@@ -1154,13 +1181,12 @@ void ScopeView::paint (Graphics& g)
         g.drawText (noteText(), na.withTrimmedLeft (24.0f), Justification::centredLeft);
     }
 
-    if (view != View::spectrum)
+    if (view != View::spectrum && ! ottShown())
     {
         g.setColour (Colour ((uint8) 165, 165, 173, 0.45f));
         g.setFont (uiFont (11.0f));
         const String hint = view == View::wave ? "wheel: height    shift + wheel: bars    double-click: reset"
-                                               : (ottShown() ? "OTT: bars from below = up, from above = down"
-                                                             : "drag the points    wheel on a point: slope / width    double-click: reset");
+                                               : "drag the points    wheel on a point: slope / width    double-click: reset";
         g.drawText (hint, s.withTrimmedRight (20.0f).withTrimmedBottom (8.0f), Justification::bottomRight);
     }
 }
@@ -2060,65 +2086,49 @@ void ScopeView::paintOtt (Graphics& g, const Theme& t)
     const auto cc = t.comp();
     const float up = rawv (ParamIDs::ottUp) * 0.01f, down = rawv (ParamIDs::ottDown) * 0.01f, depth = rawv (ParamIDs::ottDepth) * 0.01f;
     const char* names[3] = { "LOW", "MID", "HIGH" };
-    const char* ranges[3] = { "< 250 Hz", "250 Hz - 2.5 kHz", "> 2.5 kHz" };
     const float colW = p.getWidth() / 3.0f;
-    const float top = p.getY() + 4.0f, bottom = p.getBottom() - 6.0f;
-    auto yFor = [&] (float db) { return bottom - jlimit (0.0f, 1.0f, (db + 72.0f) / 72.0f) * (bottom - top); };
+    const float top = p.getY() + 22.0f, bottom = p.getBottom() - 4.0f;
+    auto yFor = [&] (float db) { return bottom - jlimit (0.0f, 1.0f, (db + 66.0f) / 66.0f) * (bottom - top); };
 
     for (int b = 0; b < 3; ++b)
     {
-        const float x0 = p.getX() + colW * (float) b + 18.0f, w = colW - 36.0f;
-        const Rectangle<float> col (x0, top, w, bottom - top);
-        g.setColour (Colours::white.withAlpha (0.04f));
-        g.fillRoundedRectangle (col, 6.0f);
+        const float x0 = p.getX() + colW * (float) b + 30.0f, w = colW - 60.0f, xc = x0 + w * 0.5f;
+        g.setColour (Colour ((uint8) 220, 220, 228, 0.8f));
+        g.setFont (uiFont (12.0f, true, 0.1f));
+        g.drawText (names[b], Rectangle<float> (x0, p.getY() - 2.0f, w, 18.0f), Justification::centred);
 
-        // band level
-        const float lvl = ottLevelUi[b];
-        const float ly = yFor (lvl);
-        ColourGradient lg (t.accentHi.withAlpha (0.75f), 0.0f, ly, t.accentDim.withAlpha (0.35f), 0.0f, bottom, false);
-        g.setGradientFill (lg);
-        g.fillRect (Rectangle<float> (x0 + w * 0.3f, ly, w * 0.4f, bottom - ly));
-
-        // thresholds: above -18 dB is pushed down, below -30 dB is pulled up
+        // the two thresholds: above the upper line it pushes down, below the lower line it pulls up
         const float dY = yFor (-18.0f), uY = yFor (-30.0f);
-        g.setColour (cc.withAlpha (0.10f * down + 0.03f));
-        g.fillRect (Rectangle<float> (x0, top, w, dY - top));
-        g.setColour (cc.withAlpha (0.10f * up + 0.03f));
-        g.fillRect (Rectangle<float> (x0, uY, w, bottom - uY));
-        g.setColour (cc.withAlpha (0.8f));
+        g.setColour (cc.withAlpha (0.10f + 0.25f * down));
         g.drawHorizontalLine (roundToInt (dY), x0, x0 + w);
+        g.setColour (cc.withAlpha (0.10f + 0.25f * up));
         g.drawHorizontalLine (roundToInt (uY), x0, x0 + w);
+        g.setColour (Colours::white.withAlpha (0.05f));
+        g.drawVerticalLine (roundToInt (xc), top, bottom);
 
-        // what it does right now: up from below, down from above
-        const float gv = ottGainUi[b];
-        const float scale = (bottom - top) / 36.0f;
-        if (gv > 0.05f)
-        {
-            const float h = jmin (bottom - top, gv * scale);
-            g.setColour (cc.withAlpha (0.85f));
-            g.fillRoundedRectangle (Rectangle<float> (x0 + 4.0f, bottom - h, 10.0f, h), 3.0f);
-            g.fillRoundedRectangle (Rectangle<float> (x0 + w - 14.0f, bottom - h, 10.0f, h), 3.0f);
-        }
-        else if (gv < -0.05f)
-        {
-            const float h = jmin (bottom - top, -gv * scale);
-            g.setColour (cc.withAlpha (0.85f));
-            g.fillRoundedRectangle (Rectangle<float> (x0 + 4.0f, top, 10.0f, h), 3.0f);
-            g.fillRoundedRectangle (Rectangle<float> (x0 + w - 14.0f, top, 10.0f, h), 3.0f);
-        }
-        g.setColour (Colour ((uint8) 220, 220, 228, 0.85f));
-        g.setFont (uiFont (12.0f, true, 0.08f));
-        g.drawText (names[b], Rectangle<float> (x0, top + 4.0f, w, 16.0f), Justification::centred);
-        g.setFont (uiFont (10.0f));
-        g.setColour (Colour ((uint8) 200, 200, 210, 0.55f));
-        g.drawText (ranges[b], Rectangle<float> (x0, top + 20.0f, w, 14.0f), Justification::centred);
+        // level coming in (thin line) and where OTT takes it (bright line), the gap between them is what it does
+        const float inDb = ottLevelUi[b], gv = ottGainUi[b];
+        const float yIn = yFor (inDb), yOut = yFor (inDb + gv);
+        const float lw = w * 0.56f;
+        g.setColour (cc.withAlpha (0.16f));
+        g.fillRect (Rectangle<float> (xc - lw * 0.5f, jmin (yIn, yOut), lw, std::abs (yOut - yIn)));
+        g.setColour (Colours::white.withAlpha (0.45f));
+        g.fillRect (Rectangle<float> (xc - lw * 0.5f, yIn - 0.75f, lw, 1.5f));
         g.setColour (cc);
-        g.setFont (uiFont (12.0f, true));
-        g.drawText ((gv >= 0.05f ? "+" : "") + String (gv, 1) + " dB", Rectangle<float> (x0, bottom + 2.0f, w, 16.0f), Justification::centred);
+        g.fillRect (Rectangle<float> (xc - lw * 0.5f, yOut - 1.0f, lw, 2.0f));
+        if (std::abs (yOut - yIn) > 8.0f)
+        {
+            Path arrow;
+            const float dir = yOut < yIn ? -1.0f : 1.0f;
+            arrow.addTriangle (xc, yOut, xc - 5.0f, yOut - dir * 7.0f, xc + 5.0f, yOut - dir * 7.0f);
+            g.fillPath (arrow);
+        }
+        g.setFont (uiFont (11.0f, true));
+        g.drawText ((gv >= 0.05f ? "+" : "") + String (gv, 1) + " dB", Rectangle<float> (xc + lw * 0.5f + 4.0f, yOut - 8.0f, 60.0f, 16.0f), Justification::centredLeft);
     }
     g.setColour (Colour ((uint8) 200, 200, 210, 0.6f));
     g.setFont (uiFont (11.0f, true));
-    g.drawText ("OTT  depth " + String (roundToInt (depth * 100.0f)) + " %   up " + String (roundToInt (up * 100.0f))
+    g.drawText ("OTT   depth " + String (roundToInt (depth * 100.0f)) + " %   up " + String (roundToInt (up * 100.0f))
                     + " %   down " + String (roundToInt (down * 100.0f)) + " %",
                 screen().withTrimmedLeft (22.0f).withTrimmedBottom (8.0f), Justification::bottomLeft);
 }
