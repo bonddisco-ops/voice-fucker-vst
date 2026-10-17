@@ -5,7 +5,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 # Static MSVC runtime: the plugin does not depend on the host's C++ runtime DLLs
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(VoiceFucker VERSION 2.0.2)
+project(VoiceFucker VERSION 2.0.3)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -85,7 +85,7 @@ if(VF_HEADLESS_TEST)
         Source/PresetManager.cpp)
     target_include_directories(VFTest PRIVATE Source)
     target_compile_definitions(VFTest PRIVATE
-        JucePlugin_Name="Voice Fucker" JucePlugin_VersionString="2.0.2" JucePlugin_IsSynth=0 JucePlugin_WantsMidiInput=1
+        JucePlugin_Name="Voice Fucker" JucePlugin_VersionString="2.0.3" JucePlugin_IsSynth=0 JucePlugin_WantsMidiInput=1
         JucePlugin_ProducesMidiOutput=0 JucePlugin_IsMidiEffect=0
         JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JUCE_USE_XRANDR=0 JUCE_USE_XINERAMA=0 JUCE_USE_XCURSOR=0

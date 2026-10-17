@@ -104,7 +104,7 @@ namespace Tables
     inline const juce::StringArray slopes     { "12 dB/oct", "24 dB/oct", "48 dB/oct" };
     inline const juce::StringArray roots      { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
-    struct Scale { const char* name; std::initializer_list<int> notes; };
+    struct Scale { const char* name; std::vector<int> notes; };
     inline const std::vector<Scale>& scales()
     {
         static const std::vector<Scale> s {

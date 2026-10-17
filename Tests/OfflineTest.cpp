@@ -3,6 +3,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <set>
 
 namespace
 {
@@ -115,6 +116,7 @@ int main (int argc, char** argv)
         juce::AudioBuffer<float> out (2, voice.getNumSamples());
         juce::AudioBuffer<float> buf (4, block);   // main stereo + sidechain stereo
         double autoErr = 0; int autoN = 0;
+        std::set<int> seen[Tables::numIntervals];
         const auto t0 = juce::Time::getHighResolutionTicks();
         for (int pos = 0; pos < voice.getNumSamples(); pos += block)
         {
@@ -137,6 +139,7 @@ int main (int argc, char** argv)
                 }
             }
             p.processBlock (buf, midi);
+            for (int j = 0; j < Tables::numIntervals; ++j) seen[j].insert (p.uiInterval[(size_t) j].load());
             for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, len);
             const float hz = p.uiAutoHz.load();
             const float truth = f0[(size_t) std::min (pos + len, (int) f0.size() - 1)];
@@ -166,6 +169,8 @@ int main (int argc, char** argv)
                      vf::gainToDb (gap), secs / 6.0 * 100.0,
                      autoN > 0 ? juce::String (autoErr / autoN, 2).toRawUTF8() : "-", finite ? "" : "NON-FINITE!");
         if (! finite || peak > 1.5f || rL < 1e-4f) ok = false;
+        for (int j = 0; j < Tables::numIntervals; ++j)
+            if (seen[j].size() > 1) { std::printf ("   INTERVAL %s JUMPS (%d values)\n", Tables::intervalNames[j], (int) seen[j].size()); ok = false; }
         writeWav (out, sr, outDir.getChildFile (c.name + ".wav"));
     }
 
