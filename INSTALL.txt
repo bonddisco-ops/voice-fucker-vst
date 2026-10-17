@@ -1,0 +1,25 @@
+VOICE FUCKER by Primal Rage Lab
+===============================
+
+WINDOWS
+1. Copy "Voice Fucker.vst3" to:  C:\Program Files\Common Files\VST3
+2. Rescan plugins in your DAW.
+"Voice Fucker.exe" is the standalone version (no DAW needed).
+
+MAC
+1. VST3: copy "Voice Fucker.vst3" to  ~/Library/Audio/Plug-Ins/VST3
+   AU (Logic, GarageBand): copy "Voice Fucker.component" to  ~/Library/Audio/Plug-Ins/Components
+   (In Finder press Shift+Cmd+G and paste the folder path.)
+2. Open Terminal and run these two lines (otherwise macOS blocks the plugin):
+   xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Voice Fucker.vst3"
+   xattr -cr ~/Library/Audio/Plug-Ins/Components/"Voice Fucker.component"
+3. Rescan plugins in your DAW. In Logic it appears under "MIDI-controlled Effects".
+
+HOW TO FEED IT
+- Put Voice Fucker on your vocal track.
+- MIDI notes (Pitch = MIDI): in Bitwig add a Note Receiver before the plugin
+  and pick the track with your notes. In Ableton set the MIDI track's
+  "MIDI To" to the vocal track / Voice Fucker.
+- Audio carrier (Source = Sidechain): route your synth into the plugin's
+  sidechain input (Bitwig: sidechain selector in the plugin header).
+- Pitch = Auto needs nothing: the robot follows the melody of your voice.

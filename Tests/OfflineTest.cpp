@@ -1,0 +1,214 @@
+// Offline test: renders a synthetic voice through Voice Fucker with several settings,
+// checks levels / stability / CPU, and saves a screenshot of the editor.
+#include <juce_audio_utils/juce_audio_utils.h>
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+namespace
+{
+    // crude singing voice: glottal pulses through two formant resonators, with "s" bursts and pauses
+    juce::AudioBuffer<float> makeVoice (double sr, float seconds, std::vector<float>& f0Track)
+    {
+        const int n = (int) (sr * seconds);
+        juce::AudioBuffer<float> b (2, n);
+        vf::Biquad f1, f2, f3, sHp;
+        vf::Noise nz;
+        float ph = 0;
+        sHp.setHighPass ((float) sr, 5000.f);
+        f0Track.assign ((size_t) n, 0.f);
+        const float vowels[3][3] = { { 730, 1090, 2440 }, { 270, 2290, 3010 }, { 300, 870, 2240 } };
+        int lastV = -1;
+        for (int i = 0; i < n; ++i)
+        {
+            const float t = (float) i / (float) sr;
+            const float seg = std::fmod (t, 1.0f);
+            const int v = ((int) t) % 3;
+            if (v != lastV)
+            {
+                f1.setBandPass ((float) sr, vowels[v][0], 6.f); f2.setBandPass ((float) sr, vowels[v][1], 8.f); f3.setBandPass ((float) sr, vowels[v][2], 10.f);
+                lastV = v;
+            }
+            float x = 0;
+            if (seg < 0.7f)
+            {
+                const float f0 = 130.f * std::pow (2.f, (float) ((int) (t * 2.f) % 4) * 3.f / 12.f) * (1.f + 0.01f * std::sin (t * 30.f));
+                f0Track[(size_t) i] = f0;
+                ph += f0 / (float) sr; if (ph >= 1) ph -= 1;
+                const float pulse = ph < 0.1f ? std::sin (ph / 0.1f * vf::pi) : 0.f;
+                x = f1.process (pulse) * 2.f + f2.process (pulse) * 1.2f + f3.process (pulse) * 0.6f;
+                x *= std::min (1.f, seg * 20.f) * std::min (1.f, (0.7f - seg) * 20.f);
+            }
+            else if (seg < 0.82f)
+                x = sHp.process (nz.next()) * 0.25f;   // "sss"
+            b.setSample (0, i, x * 0.5f);
+            b.setSample (1, i, x * 0.5f);
+        }
+        return b;
+    }
+
+    float rms (const juce::AudioBuffer<float>& b, int ch, int start, int len)
+    {
+        double s = 0;
+        for (int i = start; i < start + len; ++i) s += (double) b.getSample (ch, i) * b.getSample (ch, i);
+        return (float) std::sqrt (s / std::max (1, len));
+    }
+
+    void setP (VoiceFuckerProcessor& p, const juce::String& id, float v)
+    {
+        auto* prm = p.apvts.getParameter (id);
+        prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+    }
+
+    void writeWav (const juce::AudioBuffer<float>& b, double sr, const juce::File& f)
+    {
+        f.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0));
+        if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+    }
+}
+
+int main (int argc, char** argv)
+{
+    juce::ScopedJuceInitialiser_GUI gui;
+    const juce::File outDir (argc > 1 ? argv[1] : "/tmp/vftest");
+    outDir.createDirectory();
+    const double sr = 48000.0;
+    const int block = 256;
+    std::vector<float> f0;
+    auto voice = makeVoice (sr, 6.f, f0);
+    writeWav (voice, sr, outDir.getChildFile ("input.wav"));
+
+    struct Case { juce::String name; std::function<void (VoiceFuckerProcessor&)> setup; bool midi; };
+    std::vector<Case> cases {
+        { "default_auto", [] (VoiceFuckerProcessor&) {}, false },
+        { "clean_robot", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_on", 0); setP (p, "width_on", 0); setP (p, "autogain", 0); }, false },
+        { "fixed_note", [] (VoiceFuckerProcessor& p) { setP (p, "car_pitch", 2); }, false },
+        { "midi_chord", [] (VoiceFuckerProcessor& p) { setP (p, "car_pitch", 0); }, true },
+        { "harm_spectral_100", [] (VoiceFuckerProcessor& p) { setP (p, "voc_bands", 100); setP (p, "harm_pan", 2);
+                                   for (int i = 0; i < 9; ++i) setP (p, Params::ivOn (i), 1); }, false },
+        { "harm_fan", [] (VoiceFuckerProcessor& p) { setP (p, Params::ivOn (1), 1); setP (p, Params::ivOn (7), 1); setP (p, Params::ivOn (0), 1); }, false },
+        { "crunch_max", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_crunch", 100); setP (p, "dirt_drive", 100); setP (p, "dirt_destroy", 70); setP (p, "dirt_mode", 2); }, false },
+        { "vocoder_off", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, "dirt_crunch", 60); }, false },
+        { "noise_carrier", [] (VoiceFuckerProcessor& p) { setP (p, "car_src", 3); }, false },
+        { "haas_chorus", [] (VoiceFuckerProcessor& p) { setP (p, "width_mode", 1); setP (p, "width_amt", 100); }, false },
+        { "chorus", [] (VoiceFuckerProcessor& p) { setP (p, "width_mode", 2); setP (p, "width_amt", 100); }, false },
+        { "formant_down", [] (VoiceFuckerProcessor& p) { setP (p, "voc_formant", -12); }, false },
+        { "formant_up", [] (VoiceFuckerProcessor& p) { setP (p, "voc_formant", 12); }, false },
+    };
+    for (int fp = 1; fp < 8; ++fp)
+        cases.push_back ({ "preset_" + juce::String (fp), [fp] (VoiceFuckerProcessor& p) { p.loadFactoryPreset (fp); }, false });
+
+    bool ok = true;
+    for (auto& c : cases)
+    {
+        VoiceFuckerProcessor p;
+        p.setPlayConfigDetails (2, 2, sr, block);
+        p.prepareToPlay (sr, block);
+        c.setup (p);
+        juce::AudioBuffer<float> out (2, voice.getNumSamples());
+        juce::AudioBuffer<float> buf (4, block);   // main stereo + sidechain stereo
+        double autoErr = 0; int autoN = 0;
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        for (int pos = 0; pos < voice.getNumSamples(); pos += block)
+        {
+            const int len = std::min (block, voice.getNumSamples() - pos);
+            buf.setSize (4, len, false, false, true);
+            buf.clear();
+            for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, pos, len);
+            juce::MidiBuffer midi;
+            if (c.midi)
+            {
+                const int beat = (int) (sr * 1.5);
+                if (pos % beat < block && pos + len > 0)
+                {
+                    const int off = (beat - pos % beat) % beat;
+                    if (off < len) {
+                        const int root = 45 + ((pos / beat) % 3) * 2;
+                        for (int k : { 0, 3, 7 }) midi.addEvent (juce::MidiMessage::noteOff (1, root - 2 + k), off);
+                        for (int k : { 0, 3, 7 }) midi.addEvent (juce::MidiMessage::noteOn (1, root + k, (juce::uint8) 100), off);
+                    }
+                }
+            }
+            p.processBlock (buf, midi);
+            for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, len);
+            const float hz = p.uiAutoHz.load();
+            const float truth = f0[(size_t) std::min (pos + len, (int) f0.size() - 1)];
+            if (hz > 0 && truth > 0 && pos > (int) sr / 2)
+            { autoErr += std::abs (vf::hzToMidi (hz) - vf::hzToMidi (truth)); ++autoN; }
+        }
+        const double secs = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+        bool finite = true;
+        float peak = 0;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < out.getNumSamples(); ++i)
+            {
+                const float v = out.getSample (ch, i);
+                if (! std::isfinite (v)) finite = false;
+                peak = std::max (peak, std::abs (v));
+            }
+        const int a = (int) (sr * 1.0), len = (int) (sr * 4.0);
+        const float rIn = rms (voice, 0, a, len), rL = rms (out, 0, a, len), rR = rms (out, 1, a, len);
+        // stereo correlation as a width indicator
+        double sLR = 0, sLL = 0, sRR = 0;
+        for (int i = a; i < a + len; ++i) { const double l = out.getSample (0, i), r = out.getSample (1, i); sLR += l * r; sLL += l * l; sRR += r * r; }
+        const double corr = sLR / std::sqrt (sLL * sRR + 1e-20);
+        // silence between phrases (gate): level in the gap after the "s"
+        const float gap = rms (out, 0, (int) (sr * 2.88), (int) (sr * 0.1));
+        std::printf ("%-20s in %6.1f dB  out L %6.1f R %6.1f dB  peak %6.1f dB  corr %5.2f  gap %6.1f dB  cpu %5.1f%%  pitchErr %s  %s\n",
+                     c.name.toRawUTF8(), vf::gainToDb (rIn), vf::gainToDb (rL), vf::gainToDb (rR), vf::gainToDb (peak), corr,
+                     vf::gainToDb (gap), secs / 6.0 * 100.0,
+                     autoN > 0 ? juce::String (autoErr / autoN, 2).toRawUTF8() : "-", finite ? "" : "NON-FINITE!");
+        if (! finite || peak > 1.5f || rL < 1e-4f) ok = false;
+        writeWav (out, sr, outDir.getChildFile (c.name + ".wav"));
+    }
+
+    // state round trip
+    {
+        VoiceFuckerProcessor a, b;
+        a.loadFactoryPreset (3);
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        b.setStateInformation (mb.getData(), (int) mb.getSize());
+        const bool same = b.getPresetName() == a.getPresetName()
+                          && std::abs (b.apvts.getRawParameterValue ("dirt_crunch")->load() - a.apvts.getRawParameterValue ("dirt_crunch")->load()) < 0.01f;
+        std::printf ("state round trip: %s\n", same ? "ok" : "FAILED");
+        ok = ok && same;
+    }
+
+    // editor screenshot
+    {
+        VoiceFuckerProcessor p;
+        p.setPlayConfigDetails (2, 2, sr, block);
+        p.prepareToPlay (sr, block);
+        setP (p, Params::ivOn (1), 1); setP (p, Params::ivOn (7), 1); setP (p, Params::ivOn (0), 1);
+        juce::AudioBuffer<float> buf (4, block);
+        for (int pos = 0; pos < (int) (sr * 0.7); pos += block)
+        {
+            buf.clear();
+            for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, pos + (int) sr, block);
+            juce::MidiBuffer m; p.processBlock (buf, m);
+        }
+        for (int mode = 0; mode < 2; ++mode)
+        {
+            p.screenMode = mode;
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+            for (int i = 0; i < 6; ++i)
+            {
+                buf.clear();
+                for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, voice, ch, (int) sr + i * block, block);
+                juce::MidiBuffer m; p.processBlock (buf, m);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            }
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
+            juce::PNGImageFormat png;
+            auto f = outDir.getChildFile (mode == 0 ? "ui_wave.png" : "ui_spectrum.png");
+            f.deleteFile();
+            juce::FileOutputStream os (f);
+            png.writeImageToStream (img, os);
+            std::printf ("screenshot: %s (%d x %d)\n", f.getFullPathName().toRawUTF8(), img.getWidth(), img.getHeight());
+        }
+    }
+
+    std::printf ("%s\n", ok ? "ALL OK" : "PROBLEMS FOUND");
+    return ok ? 0 : 1;
+}
