@@ -24,6 +24,12 @@ namespace
                              { harmSpread, 80 }, { widthAmt, 90 }, { dirtCrunch, 30 }, { compOn, 1 } } },
             { "Fuzz Preacher", { { vocOn, 0 }, { dirtMode, 3 }, { dirtCrunch, 55 }, { ivOn (1), 1 }, { ivOn (7), 1 },
                                  { compOn, 1 }, { compMode, 1 }, { widthMode, 2 } } },
+            { "Parallel Robot", { { vocBands, 32 }, { dryGain, 0.f }, { wetGain, -5.f }, { filterId (true, fOn), 1 },
+                                  { filterId (true, fTarget), 0 }, { filterId (true, fLc), 250 }, { filterId (true, fHc), 7000 },
+                                  { dirtDrive, 40 }, { dirtCrunch, 40 } } },
+            { "Harmony Only", { { vocOn, 0 }, { harmDry, Params::offDb }, { harmWet, 0.f }, { ivOn (1), 1 }, { ivOn (5), 1 },
+                                { ivOn (7), 1 }, { dirtOn, 0 }, { dryGain, 0.f }, { wetGain, -3.f }, { harmSpread, 60 },
+                                { filterId (false, fOn), 1 }, { filterId (false, fLc), 150 } } },
         };
         return list;
     }
@@ -114,7 +120,9 @@ bool PresetManager::load (const juce::String& name)
     // Start from defaults so parameters missing in older presets are reset
     for (auto* p : apvts.processor.getParameters())
         p->setValueNotifyingHost (p->getDefaultValue());
-    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto tree = juce::ValueTree::fromXml (*xml);
+    Params::upgradeState (tree);
+    apvts.replaceState (tree);
     currentName = name;
     markClean();
     return true;

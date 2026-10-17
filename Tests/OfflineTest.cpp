@@ -93,7 +93,15 @@ int main (int argc, char** argv)
         { "fuzz", [] (VoiceFuckerProcessor& p) { setP (p, "dirt_crunch", 80); setP (p, "dirt_mode", 3); }, false },
         { "ott", [] (VoiceFuckerProcessor& p) { setP (p, "comp_on", 1); setP (p, "ott_depth", 100); }, false },
         { "glue", [] (VoiceFuckerProcessor& p) { setP (p, "comp_on", 1); setP (p, "comp_mode", 1); setP (p, "glue_thresh", -30); }, false },
-        { "pre_post_eq", [] (VoiceFuckerProcessor& p) { setP (p, "pre_on", 1); setP (p, "pre_lc", 300); setP (p, "post_on", 1); setP (p, "post_hc", 2000); setP (p, "mix", 50); }, false },
+        { "pre_post_eq", [] (VoiceFuckerProcessor& p) { setP (p, "pre_on", 1); setP (p, "pre_lc", 300); setP (p, "post_on", 1); setP (p, "post_hc", 2000); setP (p, "dry_gain", -6); setP (p, "wet_gain", -6); }, false },
+        { "dry_only", [] (VoiceFuckerProcessor& p) { setP (p, "dry_gain", 0); setP (p, "wet_gain", -60); setP (p, "clip_on", 0); setP (p, "autogain", 0); }, false },
+        { "pre_all_dry", [] (VoiceFuckerProcessor& p) { setP (p, "dry_gain", 0); setP (p, "wet_gain", -60); setP (p, "pre_on", 1); setP (p, "pre_target", 1); setP (p, "pre_lc", 2000); }, false },
+        { "pre_fx_dry", [] (VoiceFuckerProcessor& p) { setP (p, "dry_gain", 0); setP (p, "wet_gain", -60); setP (p, "pre_on", 1); setP (p, "pre_target", 0); setP (p, "pre_lc", 2000); }, false },
+        { "parallel_postfx", [] (VoiceFuckerProcessor& p) { setP (p, "dry_gain", 0); setP (p, "wet_gain", -5); setP (p, "post_on", 1); setP (p, "post_target", 0); setP (p, "post_hc", 1500); }, false },
+        { "parallel_postall", [] (VoiceFuckerProcessor& p) { setP (p, "dry_gain", 0); setP (p, "wet_gain", -5); setP (p, "post_on", 1); setP (p, "post_target", 1); setP (p, "post_hc", 1500); }, false },
+        { "harm_only_voc", [] (VoiceFuckerProcessor& p) { setP (p, "harm_dry", -60); setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); }, false },
+        { "harm_only_raw", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, "harm_dry", -60); setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); }, false },
+        { "harm_dry_only", [] (VoiceFuckerProcessor& p) { setP (p, "harm_wet", -60); setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); }, false },
         { "voc_off_harm", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, ParamIDs::ivOn (1), 1); setP (p, ParamIDs::ivOn (7), 1); setP (p, ParamIDs::ivOn (0), 1); setP (p, "dirt_crunch", 0); setP (p, "dirt_drive", 0); }, false },
         { "gate_high", [] (VoiceFuckerProcessor& p) { setP (p, "voc_gate", -20); }, false },
         { "vocoder_off", [] (VoiceFuckerProcessor& p) { setP (p, "voc_on", 0); setP (p, "dirt_crunch", 60); }, false },
@@ -171,6 +179,15 @@ int main (int argc, char** argv)
         if (! finite || peak > 1.5f || rL < 1e-4f) ok = false;
         for (int j = 0; j < Tables::numIntervals; ++j)
             if (seen[j].size() > 1) { std::printf ("   INTERVAL %s JUMPS (%d values)\n", Tables::intervalNames[j], (int) seen[j].size()); ok = false; }
+        if (c.name == "dry_only")
+        {
+            double e = 0, r = 0;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = a; i < a + len; ++i) { const double d = out.getSample (ch, i) - voice.getSample (ch, i); e += d * d; r += voice.getSample (ch, i) * voice.getSample (ch, i); }
+            const double errDb = 10.0 * std::log10 (e / (r + 1e-20) + 1e-20);
+            std::printf ("   dry path vs input: %.1f dB error\n", errDb);
+            if (errDb > -60.0) ok = false;
+        }
         writeWav (out, sr, outDir.getChildFile (c.name + ".wav"));
     }
 
@@ -184,6 +201,25 @@ int main (int argc, char** argv)
                           && std::abs (b.apvts.getRawParameterValue ("dirt_crunch")->load() - a.apvts.getRawParameterValue ("dirt_crunch")->load()) < 0.01f;
         std::printf ("state round trip: %s\n", same ? "ok" : "FAILED");
         ok = ok && same;
+    }
+
+    // 2.0 sessions: Mix and Harm Level become Dry / Wet gains
+    {
+        VoiceFuckerProcessor a;
+        auto st = a.apvts.copyState();
+        for (const char* id : { "dry_gain", "wet_gain", "harm_dry", "harm_wet" })
+            st.removeChild (st.getChildWithProperty ("id", id), nullptr);
+        auto add = [&st] (const char* id, float v) { juce::ValueTree c ("PARAM"); c.setProperty ("id", id, nullptr); c.setProperty ("value", v, nullptr); st.appendChild (c, nullptr); };
+        add ("mix", 50.0f); add ("harm_level", 50.0f);
+        juce::MemoryBlock mb;
+        if (auto xml = st.createXml()) juce::AudioProcessor::copyXmlToBinary (*xml, mb);
+        VoiceFuckerProcessor b;
+        b.setStateInformation (mb.getData(), (int) mb.getSize());
+        const float d = b.apvts.getRawParameterValue ("dry_gain")->load(), w = b.apvts.getRawParameterValue ("wet_gain")->load();
+        const float hw = b.apvts.getRawParameterValue ("harm_wet")->load();
+        const bool good = std::abs (d + 6.02f) < 0.2f && std::abs (w + 6.02f) < 0.2f && std::abs (hw + 6.02f) < 0.2f;
+        std::printf ("old Mix 50 -> dry %.1f wet %.1f, harm level 50 -> wet %.1f: %s\n", d, w, hw, good ? "ok" : "FAILED");
+        ok = ok && good;
     }
 
     // editor screenshots

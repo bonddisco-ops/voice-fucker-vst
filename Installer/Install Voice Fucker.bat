@@ -23,6 +23,6 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Voice Fucker 2.0.3 installed to %DEST%
+echo Voice Fucker 2.1.0 installed to %DEST%
 echo Rescan plugins in your DAW. / Pereskaniruy plaginy v DAW.
 pause

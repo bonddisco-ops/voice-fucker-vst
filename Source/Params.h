@@ -31,7 +31,8 @@ namespace ParamIDs
     inline constexpr const char* harmRoot   = "harm_root";
     inline constexpr const char* harmMode   = "harm_mode";      // scale type
     inline constexpr const char* harmPan    = "harm_pan";
-    inline constexpr const char* harmLevel  = "harm_level";
+    inline constexpr const char* harmDry    = "harm_dry";       // what came into Harmonize
+    inline constexpr const char* harmWet    = "harm_wet";       // the harmony voices
     inline constexpr const char* harmDetune = "harm_detune";
     inline constexpr const char* harmSpread = "harm_spread";
     inline juce::String ivOn  (int i) { return "harm_iv" + juce::String (i) + "_on"; }
@@ -65,7 +66,9 @@ namespace ParamIDs
     inline constexpr const char* widthMono = "width_mono";
 
     // Mix / clip
-    inline constexpr const char* mix      = "mix";
+    inline constexpr const char* dryGain  = "dry_gain";   // clean voice
+    inline constexpr const char* wetGain  = "wet_gain";   // all the processing
+    inline constexpr const char* oldMix   = "mix";        // 2.0 presets: converted on load
     inline constexpr const char* autoGain = "autogain";
     inline constexpr const char* clipOn   = "clip_on";
     inline constexpr const char* clipMode = "clip_mode";
@@ -80,6 +83,7 @@ namespace ParamIDs
     inline constexpr const char* fPkFreq  = "pkfreq";
     inline constexpr const char* fPkGain  = "pkgain";
     inline constexpr const char* fPkQ     = "pkq";
+    inline constexpr const char* fTarget  = "target";   // FX or All
 
     inline juce::String filterId (bool post, const char* name) { return juce::String (post ? "post_" : "pre_") + name; }
 }
@@ -100,6 +104,7 @@ namespace Tables
     inline constexpr float glueRatioValues[] = { 2.0f, 4.0f, 10.0f };
     inline const juce::StringArray widthModes { "Spectral", "Haas", "Chorus" };
     inline const juce::StringArray panModes   { "Manual", "Spectral" };
+    inline const juce::StringArray fxTargets  { "FX", "All" };
     inline const juce::StringArray clipModes  { "Soft", "Hard" };
     inline const juce::StringArray slopes     { "12 dB/oct", "24 dB/oct", "48 dB/oct" };
     inline const juce::StringArray roots      { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
@@ -153,4 +158,11 @@ namespace Tables
 namespace Params
 {
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+
+    // 2.0 sessions and presets had one Mix knob and a Harmonize Level: turn them into the 2.1 gains
+    void upgradeState (juce::ValueTree&);
+
+    // dB knobs whose bottom means "off"
+    inline constexpr float offDb = -60.0f;
+    inline float offDbToGain (float db) { return db <= offDb + 0.05f ? 0.0f : juce::Decibels::decibelsToGain (db); }
 }

@@ -219,6 +219,7 @@ private:
 
     VoiceFuckerProcessor& proc;
     FilterPill prePill, postPill;
+    std::unique_ptr<Segmented> preTarget, postTarget;   // FX / All
     ViewSwitch viewSwitch;
 
     View view = View::wave, viewBeforeCeiling = View::wave;

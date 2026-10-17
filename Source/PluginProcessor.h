@@ -8,12 +8,11 @@
 #include "Params.h"
 #include "PresetManager.h"
 
-// Voice Fucker 2.0 by Primal Rage Lab
+// Voice Fucker 2.1 by Primal Rage Lab
 //
-//  IN -> Pre EQ (only what goes into the effect) -> vocoder (carrier: synth / sidechain + harmonies, Drive, Crunch per band)
-//     -> Dirt (Destroy) -> Comp -> Width -> Post EQ (effect only) -> Mix with the clean voice -> Clip -> Output -> OUT
-//
-// With the vocoder off, the pre-EQ'd voice itself goes through the dirt, and Harmonize pitch-shifts it.
+//  IN -> Pre EQ (FX: only the processing / All: the clean voice too) -> Carrier + Vocoder (or the voice itself when off)
+//     -> Harmonize (Dry: what came in, Wet: the harmony voices) -> Dirt (Drive, Crunch, Destroy) -> Comp -> Width
+//     -> Post EQ (FX) -> Wet Gain  +  Dry Gain (clean voice)  -> Post EQ (All) -> Clip -> Output -> OUT
 class VoiceFuckerProcessor : public juce::AudioProcessor
 {
 public:
@@ -91,8 +90,8 @@ private:
     };
     struct Band
     {
-        vf::Biquad m1, m2, cl1, cl2, cr1, cr2, ch1, ch2;
-        float envM = 0, envCL = 0, envCR = 0, envCH = 0;
+        vf::Biquad m1, m2, cl1, cl2, cr1, cr2, hl1, hl2, hr1, hr2;
+        float envM = 0, envCL = 0, envCR = 0, envHL = 0, envHR = 0;
         bool enabled = true;
     };
 
@@ -102,18 +101,18 @@ private:
     void handleMidi (const juce::MidiMessage&);
     float harmPanFor (int interval, int panMode, float spread) const;
 
-    struct FilterParams { std::atomic<float> *on, *lc, *hc, *lcSlope, *hcSlope, *pkF, *pkG, *pkQ; };
+    struct FilterParams { std::atomic<float> *on, *lc, *hc, *lcSlope, *hcSlope, *pkF, *pkG, *pkQ, *target; };
     FilterParams preP {}, postP {};
     void bindFilter (FilterParams&, bool post);
 
     std::atomic<float> *pInGain, *pOutGain, *pSrc, *pPitch, *pNote, *pGlide, *pDetune, *pSpread, *pNoise,
                        *pVocOn, *pBands, *pFormant, *pAttack, *pRelease, *pSib, *pGate,
-                       *pHarmOn, *pScale, *pRoot, *pMode, *pPan, *pHarmLevel, *pHarmDetune, *pHarmSpread,
+                       *pHarmOn, *pScale, *pRoot, *pMode, *pPan, *pHarmDry, *pHarmWet, *pHarmDetune, *pHarmSpread,
                        *pDirtOn, *pDirtMode, *pDrive, *pCrunch, *pDestroy,
                        *pCompOn, *pCompMode, *pOttDepth, *pOttTime, *pOttUp, *pOttDown,
                        *pGlueThresh, *pGlueRatio, *pGlueAttack, *pGlueRelease, *pCompMix,
                        *pWidthOn, *pWidthMode, *pWidth, *pMono,
-                       *pMix, *pAutoGain, *pClipOn, *pClipMode, *pCeiling;
+                       *pDryGain, *pWetGain, *pAutoGain, *pClipOn, *pClipMode, *pCeiling;
     std::array<std::atomic<float>*, Tables::numIntervals> pIvOn, pIvDb, pIvPan;
 
     double sr = 44100.0;
@@ -138,6 +137,8 @@ private:
     float dcX[2] {}, dcY[2] {};
     static constexpr int numWideBands = 12;
     struct WideBand { vf::Biquad b1, b2; } wide[numWideBands];
+    static constexpr int numCrunchBands = 6;
+    struct CrunchBand { vf::Biquad l1, l2, r1, r2; } crunchBands[numCrunchBands];
 
     float holdL = 0, holdR = 0, holdPhase = 0;
     vf::DelayLine dlL, dlR;
@@ -151,8 +152,8 @@ private:
     cdsp::AutoGain agComp;
 
     float rmsDry = 0, rmsWet = 0, autoGain = 1;
-    juce::SmoothedValue<float> sInGain, sOutGain, sDirtOn, sWidthOn, sClipOn, sMix, sDrive, sCrunch, sDestroy, sWidth,
-                               sHaas, sVocOn, sHarmLevel, sCeiling, sCompOn, sCompMix, sOttDepth, sPreOn, sPostOn;
+    juce::SmoothedValue<float> sInGain, sOutGain, sDirtOn, sWidthOn, sClipOn, sDryGain, sWetGain, sDrive, sCrunch, sDestroy, sWidth,
+                               sHaas, sVocOn, sHarmDry, sHarmWet, sCeiling, sCompOn, sCompMix, sOttDepth, sPreOn, sPostOn, sPreAll, sPostAll;
 
     juce::AudioBuffer<float> scBuffer;
 

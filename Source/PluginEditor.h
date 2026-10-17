@@ -126,10 +126,10 @@ private:
 
     Knob note, glide, detune, spread, noise;
     Knob bands, formant, attack, release, sib, gate;
-    Knob harmLevel, harmDetune, harmSpread;
+    Knob harmDry, harmWet, harmDetune, harmSpread;
     Knob drive, crunch, destroy;
     Knob ottDepth, ottTime, ottUp, ottDown, glueThresh, glueRatio, glueAttack, glueRelease, compMix;
-    Knob width, mono, mix, ceiling;
+    Knob width, mono, dryGain, wetGain, ceiling;
 
     AboutOverlay about;
     TourOverlay tour;

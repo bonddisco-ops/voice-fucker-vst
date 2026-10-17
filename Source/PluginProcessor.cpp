@@ -55,6 +55,13 @@ AudioProcessorValueTreeState::ParameterLayout Params::createLayout()
         return std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, NormalisableRange<float> (lo, hi, 0.0f, skew), def,
                    AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction ([] (float v, int) { return msText (v); }));
     };
+    auto offDbParam = [] (const String& id, const String& name, float hi, float def)
+    {
+        return std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, NormalisableRange<float> (Params::offDb, hi, 0.1f, 2.5f), def,
+                   AudioParameterFloatAttributes().withLabel ("dB")
+                       .withStringFromValueFunction ([] (float v, int) { return v <= Params::offDb + 0.05f ? String ("Off") : dbText (v); })
+                       .withValueFromStringFunction ([] (const String& t) { return t.trim().equalsIgnoreCase ("off") ? Params::offDb : t.getFloatValue(); }));
+    };
     auto choice = [] (const String& id, const String& name, const StringArray& items, int def)
     { return std::make_unique<AudioParameterChoice> (ParameterID { id, 1 }, name, items, def); };
     auto toggle = [] (const String& id, const String& name, bool def)
@@ -104,7 +111,8 @@ AudioProcessorValueTreeState::ParameterLayout Params::createLayout()
     layout.add (choice (harmRoot, "Root", Tables::roots, 0));
     layout.add (choice (harmMode, "Scale", Tables::scaleNames(), 1));
     layout.add (choice (harmPan, "Pan Mode", Tables::panModes, 0));
-    layout.add (pct (harmLevel, "Harm Level", 80.0f));
+    layout.add (offDbParam (harmDry, "Harm Dry", 6.0f, 0.0f));
+    layout.add (offDbParam (harmWet, "Harm Wet", 6.0f, -2.0f));
     layout.add (pct (harmDetune, "Harm Detune", 20.0f));
     layout.add (pct (harmSpread, "Harm Spread", 30.0f));
 
@@ -135,7 +143,8 @@ AudioProcessorValueTreeState::ParameterLayout Params::createLayout()
     layout.add (hzParam (widthMono, "Mono Bass", 20.0f, 500.0f, 120.0f, 0.0f, 0.0f));
 
     // Mix / clip
-    layout.add (pct (mix, "Mix", 100.0f));
+    layout.add (offDbParam (dryGain, "Dry Gain", 6.0f, Params::offDb));
+    layout.add (offDbParam (wetGain, "Wet Gain", 6.0f, 0.0f));
     layout.add (toggle (autoGain, "Auto Gain", true));
     layout.add (toggle (clipOn, "Clip On", true));
     layout.add (choice (clipMode, "Clip Mode", Tables::clipModes, 0));
@@ -146,6 +155,7 @@ AudioProcessorValueTreeState::ParameterLayout Params::createLayout()
     {
         const String n = post ? "Post " : "Pre ";
         layout.add (toggle (filterId (post, fOn), n + "EQ On", false));
+        layout.add (choice (filterId (post, fTarget), n + "EQ Target", Tables::fxTargets, 0));
         layout.add (hzParam (filterId (post, fLc), n + "Low Cut", 20.0f, 20000.0f, 20.0f, 20.0f, 0.0f));
         layout.add (hzParam (filterId (post, fHc), n + "High Cut", 20.0f, 20000.0f, 20000.0f, 0.0f, 20000.0f));
         layout.add (choice (filterId (post, fLcSlope), n + "Low Cut Slope", Tables::slopes, 1));
@@ -157,6 +167,33 @@ AudioProcessorValueTreeState::ParameterLayout Params::createLayout()
                         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return "Q " + String (v, 2); })));
     }
     return layout;
+}
+
+void Params::upgradeState (ValueTree& tree)
+{
+    auto find = [&tree] (const char* id) { return tree.getChildWithProperty ("id", id); };
+    auto add = [&tree] (const char* id, float v)
+    {
+        ValueTree c ("PARAM");
+        c.setProperty ("id", id, nullptr);
+        c.setProperty ("value", v, nullptr);
+        tree.appendChild (c, nullptr);
+    };
+    auto toDb = [] (float g) { return g < 0.001f ? Params::offDb : jmax (Params::offDb, Decibels::gainToDecibels (g)); };
+
+    auto mix = find (ParamIDs::oldMix);
+    if (mix.isValid() && ! find (ParamIDs::dryGain).isValid())
+    {
+        const float m = jlimit (0.0f, 1.0f, (float) mix.getProperty ("value") * 0.01f);
+        add (ParamIDs::dryGain, toDb (1.0f - m));
+        add (ParamIDs::wetGain, toDb (m));
+    }
+    if (mix.isValid()) tree.removeChild (mix, nullptr);
+
+    auto lvl = find ("harm_level");
+    if (lvl.isValid() && ! find (ParamIDs::harmWet).isValid())
+        add (ParamIDs::harmWet, toDb ((float) lvl.getProperty ("value") * 0.01f));
+    if (lvl.isValid()) tree.removeChild (lvl, nullptr);
 }
 
 //==============================================================================
@@ -187,13 +224,13 @@ VoiceFuckerProcessor::VoiceFuckerProcessor()
     pVocOn = raw (vocOn); pBands = raw (vocBands); pFormant = raw (vocFormant); pAttack = raw (vocAttack);
     pRelease = raw (vocRelease); pSib = raw (vocSib); pGate = raw (vocGate);
     pHarmOn = raw (harmOn); pScale = raw (harmScale); pRoot = raw (harmRoot); pMode = raw (harmMode); pPan = raw (harmPan);
-    pHarmLevel = raw (harmLevel); pHarmDetune = raw (harmDetune); pHarmSpread = raw (harmSpread);
+    pHarmDry = raw (harmDry); pHarmWet = raw (harmWet); pHarmDetune = raw (harmDetune); pHarmSpread = raw (harmSpread);
     pDirtOn = raw (dirtOn); pDirtMode = raw (dirtMode); pDrive = raw (dirtDrive); pCrunch = raw (dirtCrunch); pDestroy = raw (dirtDestroy);
     pCompOn = raw (compOn); pCompMode = raw (compMode); pOttDepth = raw (ottDepth); pOttTime = raw (ottTime);
     pOttUp = raw (ottUp); pOttDown = raw (ottDown); pGlueThresh = raw (glueThresh); pGlueRatio = raw (glueRatio);
     pGlueAttack = raw (glueAttack); pGlueRelease = raw (glueRelease); pCompMix = raw (compMix);
     pWidthOn = raw (widthOn); pWidthMode = raw (widthMode); pWidth = raw (widthAmt); pMono = raw (widthMono);
-    pMix = raw (mix); pAutoGain = raw (ParamIDs::autoGain); pClipOn = raw (clipOn); pClipMode = raw (clipMode); pCeiling = raw (ceiling);
+    pDryGain = raw (dryGain); pWetGain = raw (wetGain); pAutoGain = raw (ParamIDs::autoGain); pClipOn = raw (clipOn); pClipMode = raw (clipMode); pCeiling = raw (ceiling);
     for (int i = 0; i < Tables::numIntervals; ++i)
     {
         pIvOn[(size_t) i] = raw (ivOn (i)); pIvDb[(size_t) i] = raw (ivDb (i)); pIvPan[(size_t) i] = raw (ivPan (i));
@@ -211,6 +248,7 @@ void VoiceFuckerProcessor::bindFilter (FilterParams& f, bool post)
     f.on = raw (filterId (post, fOn)); f.lc = raw (filterId (post, fLc)); f.hc = raw (filterId (post, fHc));
     f.lcSlope = raw (filterId (post, fLcSlope)); f.hcSlope = raw (filterId (post, fHcSlope));
     f.pkF = raw (filterId (post, fPkFreq)); f.pkG = raw (filterId (post, fPkGain)); f.pkQ = raw (filterId (post, fPkQ));
+    f.target = raw (filterId (post, fTarget));
 }
 
 bool VoiceFuckerProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -252,6 +290,13 @@ void VoiceFuckerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
         wide[i].b2 = wide[i].b1;
         wide[i].b1.reset(); wide[i].b2.reset();
     }
+    for (int i = 0; i < numCrunchBands; ++i)   // Crunch: each band rips on its own
+    {
+        const float fc = 160.f * std::pow (2.f, (float) i * std::log2 (7000.f / 160.f) / (float) (numCrunchBands - 1));
+        auto& b = crunchBands[i];
+        b.l1.setBandPass ((float) sr, std::min (fc, (float) sr * 0.45f), 1.1f);
+        b.l1.reset(); b.l2 = b.r1 = b.r2 = b.l1;
+    }
 
     const dsp::ProcessSpec spec { sampleRate, (uint32) jmax (1, samplesPerBlock), 2 };
     auto prepFilter = [&] (cdsp::FilterBank& f, const FilterParams& fp)
@@ -267,9 +312,10 @@ void VoiceFuckerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     prep (sDirtOn, *pDirtOn > 0.5f); prep (sWidthOn, *pWidthOn > 0.5f); prep (sClipOn, *pClipOn > 0.5f);
     prep (sVocOn, *pVocOn > 0.5f); prep (sCompOn, *pCompOn > 0.5f);
     prep (sPreOn, *preP.on > 0.5f); prep (sPostOn, *postP.on > 0.5f);
-    prep (sMix, *pMix * 0.01f); prep (sDrive, *pDrive * 0.01f); prep (sCrunch, *pCrunch * 0.01f);
+    prep (sDryGain, Params::offDbToGain (*pDryGain)); prep (sWetGain, Params::offDbToGain (*pWetGain));
+    prep (sPreAll, *preP.target > 0.5f); prep (sPostAll, *postP.target > 0.5f); prep (sDrive, *pDrive * 0.01f); prep (sCrunch, *pCrunch * 0.01f);
     prep (sDestroy, *pDestroy * 0.01f); prep (sWidth, *pWidth * 0.01f); prep (sHaas, 0.f, 0.08);
-    prep (sHarmLevel, *pHarmLevel * 0.01f); prep (sCeiling, dbToGain (*pCeiling));
+    prep (sHarmDry, Params::offDbToGain (*pHarmDry)); prep (sHarmWet, Params::offDbToGain (*pHarmWet)); prep (sCeiling, dbToGain (*pCeiling));
     prep (sCompMix, *pCompMix * 0.01f); prep (sOttDepth, *pOttDepth * 0.01f);
 
     scBuffer.setSize (2, jmax (1, samplesPerBlock));
@@ -298,14 +344,15 @@ void VoiceFuckerProcessor::updateBands (int n, float formant)
         const float fcC = fc * shift;
         b.enabled = fcC < fs * 0.45f && fcC > 25.f;
         Biquad c; c.setBandPass (fs, jlimit (25.f, fs * 0.45f, fcC), q);
-        keep (b.cl1, c); keep (b.cl2, c); keep (b.cr1, c); keep (b.cr2, c); keep (b.ch1, c); keep (b.ch2, c);
+        keep (b.cl1, c); keep (b.cl2, c); keep (b.cr1, c); keep (b.cr2, c);
+        keep (b.hl1, c); keep (b.hl2, c); keep (b.hr1, c); keep (b.hr2, c);
     }
     if (n != curBands)
         for (int i = curBands < 0 ? 0 : std::min (curBands, n); i < maxBands; ++i)
         {
             auto& b = bands[(size_t) i];
-            for (auto* f : { &b.m1, &b.m2, &b.cl1, &b.cl2, &b.cr1, &b.cr2, &b.ch1, &b.ch2 }) f->reset();
-            b.envM = b.envCL = b.envCR = b.envCH = 0;
+            for (auto* f : { &b.m1, &b.m2, &b.cl1, &b.cl2, &b.cr1, &b.cr2, &b.hl1, &b.hl2, &b.hr1, &b.hr2 }) f->reset();
+            b.envM = b.envCL = b.envCR = b.envHL = b.envHR = 0;
         }
     curBands = n;
     curFormant = formant;
@@ -507,10 +554,12 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
     sClipOn.setTargetValue (*pClipOn > 0.5f ? 1.f : 0.f); sVocOn.setTargetValue (*pVocOn > 0.5f ? 1.f : 0.f);
     sCompOn.setTargetValue (*pCompOn > 0.5f ? 1.f : 0.f);
     sPreOn.setTargetValue (*preP.on > 0.5f ? 1.f : 0.f); sPostOn.setTargetValue (*postP.on > 0.5f ? 1.f : 0.f);
-    sMix.setTargetValue (*pMix * 0.01f); sDrive.setTargetValue (*pDrive * 0.01f); sCrunch.setTargetValue (*pCrunch * 0.01f);
+    sDryGain.setTargetValue (Params::offDbToGain (*pDryGain)); sWetGain.setTargetValue (Params::offDbToGain (*pWetGain));
+    sPreAll.setTargetValue (*preP.target > 0.5f ? 1.f : 0.f); sPostAll.setTargetValue (*postP.target > 0.5f ? 1.f : 0.f); sDrive.setTargetValue (*pDrive * 0.01f); sCrunch.setTargetValue (*pCrunch * 0.01f);
     sDestroy.setTargetValue (*pDestroy * 0.01f); sWidth.setTargetValue (*pWidth * 0.01f);
     sHaas.setTargetValue (widthMode == 1 ? 1.f : 0.f);
-    sHarmLevel.setTargetValue (*pHarmLevel * 0.01f); sCeiling.setTargetValue (dbToGain (*pCeiling));
+    sHarmDry.setTargetValue (harmOn ? Params::offDbToGain (*pHarmDry) : 1.f);
+    sHarmWet.setTargetValue (Params::offDbToGain (*pHarmWet)); sCeiling.setTargetValue (dbToGain (*pCeiling));
     sCompMix.setTargetValue (*pCompMix * 0.01f); sOttDepth.setTargetValue (*pOttDepth * 0.01f);
 
     const float vAtk = onePoleCoef (3.f, fs), vRel = onePoleCoef (70.f, fs);
@@ -557,7 +606,7 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             }
         }
 
-        // ---- pre EQ: only the signal that feeds the effect
+        // ---- Pre EQ. FX: only what goes into the processing. All: the clean voice too
         float eL = xL, eR = xR;
         {
             const float pre = sPreOn.getNextValue();
@@ -568,6 +617,8 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                 eL += (fl - eL) * pre; eR += (fr - eR) * pre;
             }
         }
+        const float preAll = sPreAll.getNextValue();
+        const float dryL = xL + (eL - xL) * preAll, dryR = xR + (eR - xR) * preAll;   // the clean voice for Dry Gain
         const float mod = 0.5f * (eL + eR);
         shifter.push (mod);
 
@@ -578,10 +629,11 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         const float wOn = sWidthOn.getNextValue();
         const float width = sWidth.getNextValue() * wOn;
         const float vocOn = sVocOn.getNextValue();
-        const float harmLevel = sHarmLevel.getNextValue();
+        const float hDry = sHarmDry.getNextValue();   // what came into Harmonize
+        const float hWet = sHarmWet.getNextValue();   // the harmony voices
 
-        // ---- carrier
-        float cL = 0, cR = 0, cH = 0;
+        // ---- carrier (main) and the harmony carrier (its own channels, so Harmonize can balance them)
+        float cL = 0, cR = 0, hcL = 0, hcR = 0;
         if (synthOn && vocOn > 0.0001f)
         {
             if (osc == 3)
@@ -612,7 +664,7 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                     {
                         const int j = hList[k];
                         const float fh = f * v.harmRatio[j];
-                        const float g = hGain[j] * harmLevel * amp * 0.577f;
+                        const float g = hGain[j] * amp * 0.577f;
                         float sum = 0;
                         for (int u = 0; u < 3; ++u)
                         {
@@ -621,8 +673,8 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                             sum += hWave == 1 ? squareBlep (ph, dt) : sawBlep (ph, dt);
                             ph += dt; if (ph >= 1.f) ph -= 1.f;
                         }
-                        if (hSpectral) cH += sum * g;
-                        else { cL += sum * g * hL[j]; cR += sum * g * hR[j]; }
+                        if (hSpectral) hcL += sum * g;
+                        else { hcL += sum * g * hL[j]; hcR += sum * g * hR[j]; }
                     }
                 }
             }
@@ -633,17 +685,10 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             const float a = noiseA.next(), b = noiseC.next();
             cL += a * noiseAmt * 0.6f; cR += (a + (b - a) * spread) * noiseAmt * 0.6f;
         }
-        if (drive > 0.001f)
-        {
-            const float k = dbToGain (drive * 32.f), mixD = std::min (1.f, drive * 6.f);
-            cL += (shape (dirtMode, cL * k) - cL) * mixD;
-            cR += (shape (dirtMode, cR * k) - cR) * mixD;
-            cH += (shape (dirtMode, cH * k) - cH) * mixD;
-        }
 
-        // ---- vocoder
-        float vL = 0, vR = 0;
-        const float crK = dbToGain (crunch * 38.f), crMix = std::min (1.f, crunch * 5.f), crNorm = 1.f / std::sqrt (crK);
+        // ---- vocoder: main voice (v) and harmonies (h) come out separately
+        float vL = 0, vR = 0, hvL = 0, hvR = 0;
+        const bool haveHarm = nH > 0 && hWet > 0.00001f;
         if (vocOn > 0.0001f)
         {
             const float w = widthMode == 0 ? width : 0.f;
@@ -660,27 +705,34 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                 const float al = std::abs (bl), ar = std::abs (br);
                 b.envCL = al + (b.envCL - al) * (al > b.envCL ? cAtk : cRel);
                 b.envCR = ar + (b.envCR - ar) * (ar > b.envCR ? cAtk : cRel);
-                float yl = bl * b.envM / (b.envCL + 1.0e-4f);
-                float yr = br * b.envM / (b.envCR + 1.0e-4f);
-
-                if (hSpectral)
-                {
-                    const float bh = b.ch2.process (b.ch1.process (cH));
-                    const float ah = std::abs (bh);
-                    b.envCH = ah + (b.envCH - ah) * (ah > b.envCH ? cAtk : cRel);
-                    const float yh = bh * b.envM / (b.envCH + 1.0e-4f) * std::min (1.5f, b.envCH * 8.f);
-                    const float side = (i % 2 ? 1.f : -1.f) * hSpread;
-                    yl += yh * (1.f - std::max (0.f, side));
-                    yr += yh * (1.f + std::min (0.f, side));
-                }
-                if (crMix > 0)
-                {
-                    yl += (shape (dirtMode, yl * crK) * crNorm - yl) * crMix;
-                    yr += (shape (dirtMode, yr * crK) * crNorm - yr) * crMix;
-                }
                 const float gl = (i % 2 == 0) ? 1.f : 1.f - w, gr = (i % 2 == 0) ? 1.f - w : 1.f;
-                vL += yl * gl;
-                vR += yr * gr;
+                vL += bl * b.envM / (b.envCL + 1.0e-4f) * gl;
+                vR += br * b.envM / (b.envCR + 1.0e-4f) * gr;
+
+                if (haveHarm)
+                {
+                    // harmonies keep their level next to the main carrier, as if they were mixed into it
+                    const float hl = b.hl2.process (b.hl1.process (hcL));
+                    const float ahl = std::abs (hl);
+                    b.envHL = ahl + (b.envHL - ahl) * (ahl > b.envHL ? cAtk : cRel);
+                    const float refL = std::max (b.envCL, b.envHL) + 1.0e-4f;
+                    if (hSpectral)
+                    {
+                        const float yh = hl * b.envM / refL;
+                        const float side = (i % 2 ? 1.f : -1.f) * hSpread;
+                        hvL += yh * (1.f - std::max (0.f, side));
+                        hvR += yh * (1.f + std::min (0.f, side));
+                    }
+                    else
+                    {
+                        const float hr = b.hr2.process (b.hr1.process (hcR));
+                        const float ahr = std::abs (hr);
+                        b.envHR = ahr + (b.envHR - ahr) * (ahr > b.envHR ? cAtk : cRel);
+                        const float refR = std::max (b.envCR, b.envHR) + 1.0e-4f;
+                        hvL += hl * b.envM / refL * gl;
+                        hvR += hr * b.envM / refR * gr;
+                    }
+                }
                 bandPk[(size_t) i] = std::max (bandPk[(size_t) i], b.envM);
             }
             const float sib = sib2.process (sib1.process (mod)) * sibAmt * 1.6f;
@@ -696,25 +748,19 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             else if (! gateOpen && gateDet > gateThr) gateOpen = true;
             gateGain = (gateOpen ? 1.f : 0.f) + (gateGain - (gateOpen ? 1.f : 0.f)) * (gateOpen ? gAtk : gRel);
         }
-        float wL = vL * vocOn * gateGain, wR = vR * vocOn * gateGain;
 
-        // vocoder off: the voice itself (with pitch-shifted harmonies) goes through the dirt
+        // ---- Harmonize: Dry = what came in (robot or voice), Wet = the harmony voices
+        const float vg = vocOn * gateGain;
+        float wL = (vL * hDry + hvL * hWet) * vg, wR = (vR * hDry + hvR * hWet) * vg;
         if (vocOn < 0.9999f)
         {
-            float rl = eL, rr = eR;
+            float rl = eL * hDry, rr = eR * hDry;
             for (int k = 0; k < nH; ++k)
             {
                 const int j = hList[k];
-                const float h = shifter.read (j, rawRatio[j]) * hGain[j] * harmLevel;
+                const float h = shifter.read (j, rawRatio[j]) * hGain[j] * hWet;
                 rl += h * hL[j]; rr += h * hR[j];
             }
-            for (const float amt : { drive * 0.7f, crunch })   // Drive warms, Crunch rips: two stages
-                if (amt > 0.001f)
-                {
-                    const float k = dbToGain (amt * 30.f), m2 = std::min (1.f, amt * 5.f), norm = 1.4f / std::sqrt (k);
-                    rl += (shape (dirtMode, rl * k) * norm - rl) * m2;
-                    rr += (shape (dirtMode, rr * k) * norm - rr) * m2;
-                }
             wL += rl * (1.f - vocOn); wR += rr * (1.f - vocOn);
         }
         else
@@ -722,13 +768,35 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             for (int k = 0; k < nH; ++k) shifter.read (hList[k], rawRatio[hList[k]]);   // keep grains running
         }
 
-        // DC blocker (asymmetric curves)
+        // DC blocker
         {
             const float yl = wL - dcX[0] + dcR * dcY[0]; dcX[0] = wL; dcY[0] = yl; wL = yl;
             const float yr = wR - dcX[1] + dcR * dcY[1]; dcX[1] = wR; dcY[1] = yr; wR = yr;
         }
 
-        // ---- Dirt: destroy
+        // ---- Dirt: everything that came out of Harmonize. Drive warms, Crunch rips each band, Destroy crushes
+        if (drive > 0.001f)
+        {
+            const float k = dbToGain (drive * 30.f), m2 = std::min (1.f, drive * 5.f), norm = 1.4f / std::sqrt (k);
+            wL += (shape (dirtMode, wL * k) * norm - wL) * m2;
+            wR += (shape (dirtMode, wR * k) * norm - wR) * m2;
+        }
+        if (crunch > 0.001f)
+        {
+            const float k = dbToGain (crunch * 34.f), m2 = std::min (1.f, crunch * 5.f), norm = 1.2f / std::sqrt (k);
+            float addL = 0, addR = 0;
+            for (auto& b : crunchBands)
+            {
+                const float bl = b.l2.process (b.l1.process (wL)), br = b.r2.process (b.r1.process (wR));
+                addL += shape (dirtMode, bl * k) * norm - bl;
+                addR += shape (dirtMode, br * k) * norm - br;
+            }
+            wL += addL * m2; wR += addR * m2;
+        }
+        else
+        {
+            for (auto& b : crunchBands) { b.l2.process (b.l1.process (wL)); b.r2.process (b.r1.process (wR)); }
+        }
         if (destroy > 0.001f)
         {
             holdPhase += 1.f / (1.f + destroy * destroy * 30.f);
@@ -798,18 +866,7 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             wL = mid + side; wR = mid - side;
         }
 
-        // ---- Post EQ: effect only
-        {
-            const float post = sPostOn.getNextValue();
-            postFilter.tick();
-            if (post > 0.0001f)
-            {
-                const float fl = postFilter.process (0, wL), fr = postFilter.process (1, wR);
-                wL += (fl - wL) * post; wR += (fr - wR) * post;
-            }
-        }
-
-        // ---- Mix + auto gain
+        // ---- Post EQ (FX: the processing only) -> Wet Gain, + Dry Gain (clean voice), Post EQ (All: everything)
         rmsDry += (1.f - rmsCoef) * (xL * xL + xR * xR - rmsDry);
         rmsWet += (1.f - rmsCoef) * (wL * wL + wR * wR - rmsWet);
         if (autoGainOn)
@@ -821,9 +878,25 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             }
         }
         else autoGain = 1.f + (autoGain - 1.f) * agCoef;
-        const float mixV = sMix.getNextValue();
-        float yL = xL * (1.f - mixV) + wL * autoGain * mixV;
-        float yR = xR * (1.f - mixV) + wR * autoGain * mixV;
+        const float wetG = sWetGain.getNextValue() * autoGain, dryG = sDryGain.getNextValue();
+        const float postAll = sPostAll.getNextValue();
+        const float post = sPostOn.getNextValue();
+        postFilter.tick();
+        // one filter serves both targets: in All the clean voice goes through it too (crossfaded, so switching never clicks)
+        const float dL = dryL * dryG, dR = dryR * dryG;
+        float yL, yR;
+        {
+            const float inL2 = wL * wetG + dL * postAll, inR2 = wR * wetG + dR * postAll;
+            float fl = inL2, fr = inR2;
+            if (post > 0.0001f)
+            {
+                fl = inL2 + (postFilter.process (0, inL2) - inL2) * post;
+                fr = inR2 + (postFilter.process (1, inR2) - inR2) * post;
+            }
+            yL = fl + dL * (1.f - postAll);
+            yR = fr + dR * (1.f - postAll);
+            if (postAll < 0.5f) { wL = fl; wR = fr; }   // what the spectrum shows as "effect"
+        }
         const float preClip = std::max (std::abs (yL), std::abs (yR));
 
         // ---- Clip
@@ -911,6 +984,7 @@ void VoiceFuckerProcessor::setStateInformation (const void* data, int sizeInByte
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto tree = ValueTree::fromXml (*xml);
+            Params::upgradeState (tree);
             apvts.replaceState (tree);
             presets.setCurrentNameFromState (tree.getProperty ("presetName", "Init").toString());
         }

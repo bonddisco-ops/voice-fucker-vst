@@ -10,7 +10,7 @@ namespace
     constexpr int row1Y = 312, row1H = 170, carrierW = 428, vocW = 508;
     constexpr int harmY = 490, harmH = 190;
     constexpr int row3Y = 688, row3H = 152;
-    constexpr int dirtW = 196, compW = 312, widthW = 196, mixW = 102, clipW = 102;
+    constexpr int dirtW = 186, compW = 302, widthW = 170, mixW = 136, clipW = 102;
     constexpr int row3Gap = (X1 - X0 - (dirtW + compW + widthW + mixW + clipW)) / 4;
     const Rectangle<int> logoArea (96, 10, 58, 60);
     const Rectangle<int> titleArea (96, 10, 360, 60);
@@ -315,7 +315,8 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     addCombo (harmBlock, scaleBox, harmMode, Tables::scaleNames(), scaleAtt);
     panSeg = std::make_unique<Segmented> (*apvts.getParameter (harmPan), Tables::panModes, true);
     harmBlock.addAndMakeVisible (*panSeg);
-    harmLevel.init (harmBlock, apvts, "Level", ParamIDs::harmLevel, true);
+    harmDry.init (harmBlock, apvts, "Dry", ParamIDs::harmDry, true);
+    harmWet.init (harmBlock, apvts, "Wet", ParamIDs::harmWet, true);
     harmDetune.init (harmBlock, apvts, "Detune", ParamIDs::harmDetune, true);
     harmSpread.init (harmBlock, apvts, "Spread", ParamIDs::harmSpread, true);
     harmSpread.slider.onValueChange = [this] { strips.repaint(); };
@@ -349,7 +350,8 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     autoGainButton.getProperties().set ("fontSize", 12.0);
     mixBlock.addAndMakeVisible (autoGainButton);
     autoGainAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (apvts, ParamIDs::autoGain, autoGainButton);
-    mix.init (mixBlock, apvts, "Mix", ParamIDs::mix, true);
+    dryGain.init (mixBlock, apvts, "Dry", ParamIDs::dryGain, true);
+    wetGain.init (mixBlock, apvts, "Wet", ParamIDs::wetGain, true);
 
     // Clip
     clipMode = std::make_unique<Segmented> (*apvts.getParameter (ParamIDs::clipMode), Tables::clipModes, true);
@@ -459,9 +461,10 @@ void VoiceFuckerEditor::resized()
     rootBox.setBounds (708, 32, 66, 24);
     scaleBox.setBounds (780, 32, 176, 24);
     panSeg->setBounds (628, 66, 328, 24);
-    harmLevel.setBounds (650, 98, 58);
-    harmDetune.setBounds (756, 98, 58);
-    harmSpread.setBounds (862, 98, 58);
+    harmDry.setBounds (634, 98, 58);
+    harmWet.setBounds (716, 98, 58);
+    harmDetune.setBounds (816, 98, 58);
+    harmSpread.setBounds (898, 98, 58);
 
     // Row 3
     const int cy = 32, ky = 60;
@@ -473,9 +476,9 @@ void VoiceFuckerEditor::resized()
     for (int i = 0; i < 4; ++i) { ott[i]->setBounds (11 + i * 58, ky, 58); glue[i]->setBounds (11 + i * 58, ky, 58); }
     compMix.setBounds (11 + 4 * 58, ky, 58);
     widthSeg->setBounds (10, cy, widthW - 20, 22);
-    width.setBounds (30, ky, 58); mono.setBounds (108, ky, 58);
-    autoGainButton.setBounds (6, cy, 94, 22);
-    mix.setBounds ((mixW - 58) / 2, ky, 58);
+    width.setBounds (18, ky, 58); mono.setBounds (94, ky, 58);
+    autoGainButton.setBounds (10, cy, mixW - 20, 22);
+    dryGain.setBounds (8, ky, 58); wetGain.setBounds (70, ky, 58);
     clipMode->setBounds (10, cy, clipW - 20, 22);
     ceiling.setBounds ((clipW - 58) / 2, ky, 58);
 }
@@ -509,7 +512,7 @@ void VoiceFuckerEditor::timerCallback()
     sourceBox.setAlpha (vocOff ? 0.4f : 1.0f);
     pitchSeg->setAlpha (vocOff || src == 3 || src == 4 ? 0.4f : 1.0f);
     const bool harmOff = ! harmBlock.isOn();
-    dim ({ &harmLevel, &harmDetune, &harmSpread }, { &scaleButton, &rootBox, &scaleBox, panSeg.get() }, harmOff);
+    dim ({ &harmDry, &harmWet, &harmDetune, &harmSpread }, { &scaleButton, &rootBox, &scaleBox, panSeg.get() }, harmOff);
     rootBox.setAlpha (harmOff || raw (harmScale) < 0.5f ? 0.4f : 1.0f);
     scaleBox.setAlpha (rootBox.getAlpha());
     dim ({ &drive, &crunch, &destroy }, { &dirtModeBox }, ! dirtBlock.isOn());
@@ -527,8 +530,8 @@ void VoiceFuckerEditor::applyTheme (const Theme& t, bool remember)
     buildBackground();
     content.sendLookAndFeelChange();
     for (auto* k : { &note, &glide, &detune, &spread, &noise, &bands, &formant, &attack, &release, &sib, &gate,
-                     &harmLevel, &harmDetune, &harmSpread, &drive, &crunch, &destroy, &ottDepth, &ottTime, &ottUp, &ottDown,
-                     &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix, &width, &mono, &mix, &ceiling,
+                     &harmDry, &harmWet, &harmDetune, &harmSpread, &drive, &crunch, &destroy, &ottDepth, &ottTime, &ottUp, &ottDown,
+                     &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix, &width, &mono, &dryGain, &wetGain, &ceiling,
                      &inCol.knob, &outCol.knob })
         k->label.setColour (Label::textColourId, t.mute);
     welcome.setLang (lang);
@@ -568,7 +571,7 @@ void VoiceFuckerEditor::applyHelp()
     release.setTooltip (tip ("release")); sib.setTooltip (tip ("sibilance")); gate.setTooltip (tip ("gate"));
     scaleButton.setTooltip (tip ("scaleOn")); rootBox.setTooltip (tip ("root")); scaleBox.setTooltip (tip ("scale"));
     panSeg->setTooltip (tip ("panMode"));
-    harmLevel.setTooltip (tip ("harmLevel")); harmDetune.setTooltip (tip ("harmDetune")); harmSpread.setTooltip (tip ("harmSpread"));
+    harmDry.setTooltip (tip ("harmDry")); harmWet.setTooltip (tip ("harmWet")); harmDetune.setTooltip (tip ("harmDetune")); harmSpread.setTooltip (tip ("harmSpread"));
     strips.setHelp (helpOn, lang);
     dirtModeBox.setTooltip (tip ("dirtMode"));
     drive.setTooltip (tip ("drive")); crunch.setTooltip (tip ("crunch")); destroy.setTooltip (tip ("destroy"));
@@ -577,7 +580,7 @@ void VoiceFuckerEditor::applyHelp()
     glueThresh.setTooltip (tip ("glueThresh")); glueRatio.setTooltip (tip ("glueRatio"));
     glueAttack.setTooltip (tip ("glueAttack")); glueRelease.setTooltip (tip ("glueRelease")); compMix.setTooltip (tip ("compMix"));
     widthSeg->setTooltip (tip ("widthMode")); width.setTooltip (tip ("width")); mono.setTooltip (tip ("monoBass"));
-    autoGainButton.setTooltip (tip ("autoGain")); mix.setTooltip (tip ("mix"));
+    autoGainButton.setTooltip (tip ("autoGain")); dryGain.setTooltip (tip ("dryGain")); wetGain.setTooltip (tip ("wetGain"));
     clipMode->setTooltip (tip ("clipMode")); ceiling.setTooltip (tip ("ceiling"));
     scope.setHelp (helpOn, lang);
     timerCallback();

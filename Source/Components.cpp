@@ -656,6 +656,10 @@ ScopeView::ScopeView (VoiceFuckerProcessor& p)
         pill->onSelect = [this, post] { selectFilter (post); setView (View::eq); };
         pill->onTurnedOn = [this, post] { selectFilter (post); setView (View::eq); };
     }
+    preTarget = std::make_unique<Segmented> (*p.apvts.getParameter (ParamIDs::filterId (false, ParamIDs::fTarget)), Tables::fxTargets, true);
+    postTarget = std::make_unique<Segmented> (*p.apvts.getParameter (ParamIDs::filterId (true, ParamIDs::fTarget)), Tables::fxTargets, true);
+    addAndMakeVisible (*preTarget);
+    addChildComponent (*postTarget);
     addAndMakeVisible (viewSwitch);
     viewSwitch.onChange = [this] (int v) { setView (v == 2 ? View::eq : (v == 1 ? View::spectrum : View::wave)); };
 
@@ -693,6 +697,9 @@ void ScopeView::resized()
     viewSwitch.setBounds (s.getCentreX() - 110, s.getY() + 12, 220, 24);
     postPill.setBounds (s.getRight() - 18 - 84, s.getY() + 11, 84, 26);
     prePill.setBounds (postPill.getX() - 8 - 76, s.getY() + 11, 76, 26);
+    const int tw = preTarget->getIdealWidth();
+    preTarget->setBounds (prePill.getX() - 10 - tw, s.getY() + 12, tw, 24);
+    postTarget->setBounds (preTarget->getBounds());
 }
 
 Rectangle<int> ScopeView::noteArea() const
@@ -702,7 +709,7 @@ Rectangle<int> ScopeView::noteArea() const
     return { s.getX() + 18, s.getY() + 11, jmax (120, w), 26 };
 }
 
-Rectangle<int> ScopeView::pillsArea() const { return prePill.getBounds().getUnion (postPill.getBounds()).expanded (8, 5); }
+Rectangle<int> ScopeView::pillsArea() const { return preTarget->getBounds().getUnion (prePill.getBounds()).getUnion (postPill.getBounds()).expanded (8, 5); }
 
 String ScopeView::noteText() const
 {
@@ -733,6 +740,8 @@ void ScopeView::selectFilter (bool post)
     postSelected = post;
     prePill.selected = ! post;
     postPill.selected = post;
+    preTarget->setVisible (! post);
+    postTarget->setVisible (post);
     prePill.repaint();
     postPill.repaint();
     repaint();
@@ -771,6 +780,8 @@ void ScopeView::setHelp (bool enabled, Help::Lang l)
     viewSwitch.setTooltip (tip ("view"));
     prePill.setTooltip (tip ("prePill"));
     postPill.setTooltip (tip ("postPill"));
+    preTarget->setTooltip (tip ("preTarget"));
+    postTarget->setTooltip (tip ("postTarget"));
     updateTooltip();
 }
 
