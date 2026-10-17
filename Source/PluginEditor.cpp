@@ -315,13 +315,6 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     addCombo (harmBlock, scaleBox, harmMode, Tables::scaleNames(), scaleAtt);
     panSeg = std::make_unique<Segmented> (*apvts.getParameter (harmPan), Tables::panModes, true);
     harmBlock.addAndMakeVisible (*panSeg);
-    for (auto* b : { &altButton, &fanButton })
-    {
-        b->setWantsKeyboardFocus (false);
-        harmBlock.addAndMakeVisible (*b);
-    }
-    altButton.onClick = [this] { quickPan (false); };
-    fanButton.onClick = [this] { quickPan (true); };
     harmLevel.init (harmBlock, apvts, "Level", ParamIDs::harmLevel, true);
     harmDetune.init (harmBlock, apvts, "Detune", ParamIDs::harmDetune, true);
     harmSpread.init (harmBlock, apvts, "Spread", ParamIDs::harmSpread, true);
@@ -426,27 +419,6 @@ VoiceFuckerEditor::~VoiceFuckerEditor()
     setLookAndFeel (nullptr);
 }
 
-void VoiceFuckerEditor::quickPan (bool fan)
-{
-    Array<int> act;
-    for (int i = 0; i < Tables::numIntervals; ++i)
-        if (proc.apvts.getRawParameterValue (ParamIDs::ivOn (i))->load() > 0.5f) act.add (i);
-    if (act.isEmpty())
-        for (int i = 0; i < Tables::numIntervals; ++i) act.add (i);
-    for (int k = 0; k < act.size(); ++k)
-    {
-        const float v = fan ? (act.size() > 1 ? (-1.0f + 2.0f * (float) k / (float) (act.size() - 1)) * 0.7f : 0.0f)
-                            : (k % 2 ? 1.0f : -1.0f) * (0.4f + 0.3f * (float) (k / 2) / (float) jmax (1, act.size() / 2));
-        auto* prm = proc.apvts.getParameter (ParamIDs::ivPan (act[k]));
-        prm->beginChangeGesture();
-        prm->setValueNotifyingHost (prm->convertTo0to1 (v));
-        prm->endChangeGesture();
-    }
-    if (auto* pm = proc.apvts.getParameter (ParamIDs::harmPan))
-        pm->setValueNotifyingHost (pm->convertTo0to1 (0.0f));
-    strips.repaint();
-}
-
 //==============================================================================
 void VoiceFuckerEditor::resized()
 {
@@ -486,9 +458,7 @@ void VoiceFuckerEditor::resized()
     scaleButton.setBounds (628, 32, 76, 24);
     rootBox.setBounds (708, 32, 66, 24);
     scaleBox.setBounds (780, 32, 176, 24);
-    panSeg->setBounds (628, 66, 160, 24);
-    altButton.setBounds (796, 66, 76, 24);
-    fanButton.setBounds (880, 66, 76, 24);
+    panSeg->setBounds (628, 66, 328, 24);
     harmLevel.setBounds (650, 98, 58);
     harmDetune.setBounds (756, 98, 58);
     harmSpread.setBounds (862, 98, 58);
@@ -539,12 +509,10 @@ void VoiceFuckerEditor::timerCallback()
     sourceBox.setAlpha (vocOff ? 0.4f : 1.0f);
     pitchSeg->setAlpha (vocOff || src == 3 || src == 4 ? 0.4f : 1.0f);
     const bool harmOff = ! harmBlock.isOn();
-    dim ({ &harmLevel, &harmDetune, &harmSpread }, { &scaleButton, &rootBox, &scaleBox, panSeg.get(), &altButton, &fanButton }, harmOff);
+    dim ({ &harmLevel, &harmDetune, &harmSpread }, { &scaleButton, &rootBox, &scaleBox, panSeg.get() }, harmOff);
     rootBox.setAlpha (harmOff || raw (harmScale) < 0.5f ? 0.4f : 1.0f);
     scaleBox.setAlpha (rootBox.getAlpha());
-    altButton.setAlpha (harmOff ? 0.4f : 1.0f);
     dim ({ &drive, &crunch, &destroy }, { &dirtModeBox }, ! dirtBlock.isOn());
-    drive.setDimmed (! dirtBlock.isOn() || vocOff);
     dim ({ &ottDepth, &ottTime, &ottUp, &ottDown, &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix }, { &compModeBox }, ! compBlock.isOn());
     dim ({ &width, &mono }, { widthSeg.get() }, ! widthBlock.isOn());
     dim ({ &ceiling }, { clipMode.get() }, ! clipBlock.isOn());
@@ -599,7 +567,7 @@ void VoiceFuckerEditor::applyHelp()
     bands.setTooltip (tip ("bands")); formant.setTooltip (tip ("formant")); attack.setTooltip (tip ("attack"));
     release.setTooltip (tip ("release")); sib.setTooltip (tip ("sibilance")); gate.setTooltip (tip ("gate"));
     scaleButton.setTooltip (tip ("scaleOn")); rootBox.setTooltip (tip ("root")); scaleBox.setTooltip (tip ("scale"));
-    panSeg->setTooltip (tip ("panMode")); altButton.setTooltip (tip ("alt")); fanButton.setTooltip (tip ("fan"));
+    panSeg->setTooltip (tip ("panMode"));
     harmLevel.setTooltip (tip ("harmLevel")); harmDetune.setTooltip (tip ("harmDetune")); harmSpread.setTooltip (tip ("harmSpread"));
     strips.setHelp (helpOn, lang);
     dirtModeBox.setTooltip (tip ("dirtMode"));

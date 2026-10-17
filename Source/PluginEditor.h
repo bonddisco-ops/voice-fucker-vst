@@ -91,7 +91,6 @@ private:
     void addCombo (juce::Component& parent, juce::ComboBox&, const char* paramId, const juce::StringArray& items,
                    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>&);
     juce::Rectangle<float> tourTarget (const juce::String& name);
-    void quickPan (bool fan);
 
     VoiceFuckerProcessor& proc;
     VFLookAndFeel laf;                // first, so it outlives every component
@@ -123,7 +122,6 @@ private:
     std::unique_ptr<Segmented> pitchSeg, panSeg, widthSeg, clipMode;
     juce::ToggleButton scaleButton { "Scale" }, autoGainButton { "Auto gain" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> scaleAtt2, autoGainAtt;
-    juce::TextButton altButton { "Alt" }, fanButton { "Fan" };
     HarmStrips strips { proc };
 
     Knob note, glide, detune, spread, noise;

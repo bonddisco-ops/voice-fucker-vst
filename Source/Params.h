@@ -133,19 +133,14 @@ namespace Tables
         return false;
     }
 
-    // The interval that really sounds: thirds, fourths and fifths move to the nearest note of the scale
-    inline int snapInterval (int baseNote, int iv, bool useScale, int root, int scaleIndex)
+    // The interval that really sounds, fixed by the root and the scale: thirds, fourths and fifths
+    // move by at most a semitone to stay in the scale (counted from the root)
+    inline int snapInterval (int iv, bool useScale, int root, int scaleIndex)
     {
         const int a = std::abs (iv), sign = iv < 0 ? -1 : 1;
         if (! useScale || a == 12 || a == 24) return iv;
-        for (int d = 0; d <= 6; ++d)
-            for (int s : { -1, 1 })
-            {
-                const int c = a + s * d;
-                if (c <= 0 || c >= 12) continue;
-                if (inScale (baseNote + sign * c, root, scaleIndex)) return sign * c;
-                if (d == 0) break;
-            }
+        for (int c : { a, a + 1, a - 1 })
+            if (inScale (root + sign * c, root, scaleIndex)) return sign * c;
         return iv;
     }
 

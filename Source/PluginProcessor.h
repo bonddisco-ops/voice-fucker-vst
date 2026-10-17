@@ -136,6 +136,8 @@ private:
     float gateDet = 0, gateGain = 1;
     bool gateOpen = true;
     float dcX[2] {}, dcY[2] {};
+    static constexpr int numWideBands = 12;
+    struct WideBand { vf::Biquad b1, b2; } wide[numWideBands];
 
     float holdL = 0, holdR = 0, holdPhase = 0;
     vf::DelayLine dlL, dlR;

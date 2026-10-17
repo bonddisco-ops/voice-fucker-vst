@@ -245,6 +245,13 @@ void VoiceFuckerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     rmsDry = rmsWet = 0; autoGain = 1;
     holdL = holdR = holdPhase = 0;
     dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0;
+    for (int i = 0; i < numWideBands; ++i)
+    {
+        const float fc = 150.f * std::pow (2.f, (float) i * std::log2 (9000.f / 150.f) / (float) (numWideBands - 1));
+        wide[i].b1.setBandPass ((float) sr, std::min (fc, (float) sr * 0.45f), 1.6f);
+        wide[i].b2 = wide[i].b1;
+        wide[i].b1.reset(); wide[i].b2.reset();
+    }
 
     const dsp::ProcessSpec spec { sampleRate, (uint32) jmax (1, samplesPerBlock), 2 };
     auto prepFilter = [&] (cdsp::FilterBank& f, const FilterParams& fp)
@@ -309,9 +316,10 @@ void VoiceFuckerProcessor::computeHarmonyLayout (int vi, float baseNote)
 {
     auto& v = voices[(size_t) vi];
     const bool useScale = *pScale > 0.5f;
-    const int root = (int) *pRoot, mode = (int) *pMode, base = roundToInt (baseNote);
+    const int root = (int) *pRoot, mode = (int) *pMode;
+    ignoreUnused (baseNote);
     for (int j = 0; j < Tables::numIntervals; ++j)
-        v.harmRatio[j] = std::pow (2.f, (float) Tables::snapInterval (base, Tables::intervals[j], useScale, root, mode) / 12.f);
+        v.harmRatio[j] = std::pow (2.f, (float) Tables::snapInterval (Tables::intervals[j], useScale, root, mode) / 12.f);
 }
 
 float VoiceFuckerProcessor::harmPanFor (int j, int panMode, float spread) const
@@ -455,10 +463,11 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
     // harmonies of the raw voice (vocoder off) follow the detected note
     float rawRatio[Tables::numIntervals];
     {
-        const float baseNote = detectedHz > 0 ? hzToMidi (detectedHz) : 60.f;
         const bool useScale = *pScale > 0.5f;
         for (int j = 0; j < Tables::numIntervals; ++j)
-            rawRatio[j] = std::pow (2.f, (float) Tables::snapInterval (roundToInt (baseNote), Tables::intervals[j], useScale, (int) *pRoot, (int) *pMode) / 12.f);
+            rawRatio[j] = std::pow (2.f, (float) Tables::snapInterval (Tables::intervals[j], useScale, (int) *pRoot, (int) *pMode) / 12.f);
+        for (auto& v : voices)
+            for (int j = 0; j < Tables::numIntervals; ++j) v.harmRatio[j] = rawRatio[j];
     }
     shifter.setWindowFromPeriod (detectedPeriod);
 
@@ -699,13 +708,13 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
                 const float h = shifter.read (j, rawRatio[j]) * hGain[j] * harmLevel;
                 rl += h * hL[j]; rr += h * hR[j];
             }
-            const float amt = std::max (drive, crunch);
-            if (amt > 0.001f)
-            {
-                const float k = dbToGain (amt * 34.f), m2 = std::min (1.f, amt * 5.f), norm = 1.5f / std::sqrt (k);
-                rl += (shape (dirtMode, rl * k) * norm - rl) * m2;
-                rr += (shape (dirtMode, rr * k) * norm - rr) * m2;
-            }
+            for (const float amt : { drive * 0.7f, crunch })   // Drive warms, Crunch rips: two stages
+                if (amt > 0.001f)
+                {
+                    const float k = dbToGain (amt * 30.f), m2 = std::min (1.f, amt * 5.f), norm = 1.4f / std::sqrt (k);
+                    rl += (shape (dirtMode, rl * k) * norm - rl) * m2;
+                    rr += (shape (dirtMode, rr * k) * norm - rr) * m2;
+                }
             wL += rl * (1.f - vocOn); wR += rr * (1.f - vocOn);
         }
         else
@@ -771,7 +780,19 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
             }
             const float mid = 0.5f * (wL + wR);
             float side = 0.5f * (wL - wR);
-            if (widthMode == 0) side *= 1.f + 0.6f * width;
+            if (widthMode == 0)
+            {
+                side *= 1.f + 0.6f * width;
+                // without the vocoder there are no bands to spread, so split the voice here
+                const float rawPart = 1.f - vocOn;
+                if (rawPart > 0.0001f && width > 0.0001f)
+                {
+                    float extra = 0;
+                    for (int i = 0; i < numWideBands; ++i)
+                        extra += wide[i].b2.process (wide[i].b1.process (mid)) * (i % 2 ? 1.f : -1.f);
+                    side += extra * width * 0.8f * rawPart;
+                }
+            }
             const float hp = sideHp2.process (sideHp1.process (side));
             side += (hp - side) * wOn;
             wL = mid + side; wR = mid - side;
@@ -869,12 +890,9 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         if (note >= 0) lowest = std::min (lowest, note);
     }
     uiAutoHz = detectedHz;
-    {
-        const int base = pitchMode == 1 || lowest == 1000 ? (detectedHz > 0 ? roundToInt (hzToMidi (detectedHz)) : -1) : lowest;
-        for (int j = 0; j < Tables::numIntervals; ++j)
-            uiInterval[(size_t) j] = base < 0 ? Tables::intervals[j]
-                                              : Tables::snapInterval (base, Tables::intervals[j], *pScale > 0.5f, (int) *pRoot, (int) *pMode);
-    }
+    ignoreUnused (lowest);
+    for (int j = 0; j < Tables::numIntervals; ++j)
+        uiInterval[(size_t) j] = Tables::snapInterval (Tables::intervals[j], *pScale > 0.5f, (int) *pRoot, (int) *pMode);
     for (int c = 2; c < buffer.getNumChannels(); ++c)
         if (c >= outCh) buffer.clear (c, 0, n);
 }
