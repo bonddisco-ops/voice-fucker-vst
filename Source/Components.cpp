@@ -661,7 +661,7 @@ ScopeView::ScopeView (VoiceFuckerProcessor& p)
     addAndMakeVisible (*preTarget);
     addChildComponent (*postTarget);
     addAndMakeVisible (viewSwitch);
-    viewSwitch.onChange = [this] (int v) { setView (v == 2 ? View::eq : (v == 1 ? View::spectrum : View::wave)); };
+    viewSwitch.onChange = [this] (int v) { compSwitchedView = false; dismissComp(); setView (v == 2 ? View::eq : (v == 1 ? View::spectrum : View::wave)); };
 
     fftData.assign ((size_t) fftSize * 2, 0.0f);
     window.resize ((size_t) fftSize);
@@ -737,7 +737,6 @@ String ScopeView::noteText() const
 
 void ScopeView::selectFilter (bool post)
 {
-    setOttFocus (false);
     postSelected = post;
     prePill.selected = ! post;
     postPill.selected = post;
@@ -824,7 +823,23 @@ void ScopeView::timerCallback()
     // compressor: follow its mode (Glue -> WAVE, OTT -> EQ screen) when it is switched, and animate its meters
     {
             const float gr = proc.uiGlueGr.load(), in = proc.uiGlueIn.load();
-        if (ottFocus && ! ottOn()) setOttFocus (false);
+        // compressor picture: hold while set, then 5 s, then a smooth fade back to the screen that was there
+        if (compKind == 1 && ! glueOn()) compKind = 0;
+        if (compKind == 2 && ! ottOn()) compKind = 0;
+        if (compKind != 0 && ! compHeld && now - compTouchMs > 5000.0) compKind = 0;
+        compFade = compKind != 0 ? jmin (1.0f, compFade + 0.12f) : jmax (0.0f, compFade - 0.05f);
+        if (compKind == 0 && compFade <= 0.0f && compShownKind != 0)
+        {
+            compShownKind = 0;
+            if (compSwitchedView) { compSwitchedView = false; setView (viewBeforeComp); }
+        }
+        {
+            const float a = ottVisible() ? compFade : 0.0f;
+            for (Component* c : { (Component*) &prePill, (Component*) &postPill, (Component*) preTarget.get(), (Component*) postTarget.get() })
+                c->setAlpha (1.0f - a);
+            prePill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
+            postPill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
+        }
         // compressor meters: fast attack, slower fall, so the movement reads well
         auto follow = [] (float& shown, float target, float up, float down)
         { shown += (std::abs (target) > std::abs (shown) ? up : down) * (target - shown); };
@@ -851,33 +866,30 @@ bool ScopeView::ottOn() const
         && roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 0;
 }
 
-void ScopeView::setOttFocus (bool f)
+void ScopeView::touchComp (int kind, bool held)
 {
-    if (ottFocus == f)
+    if ((kind == 1 && ! glueOn()) || (kind == 2 && ! ottOn()))
         return;
-    ottFocus = f;
-    prePill.selected = ! f && ! postSelected;
-    postPill.selected = ! f && postSelected;
-    preTarget->setVisible (! f && ! postSelected);
-    postTarget->setVisible (! f && postSelected);
-    prePill.repaint();
-    postPill.repaint();
-    updateTooltip();
-    repaint();
+    if (kind == 1 && compShownKind != 1 && view != View::wave)
+    {
+        viewBeforeComp = view;
+        compSwitchedView = true;
+        setView (View::wave);
+    }
+    if (kind == 2 && compSwitchedView && compShownKind == 1)   // was Glue on a borrowed WAVE: give the screen back first
+    {
+        compSwitchedView = false;
+        setView (viewBeforeComp);
+    }
+    compKind = compShownKind = kind;
+    compHeld = held;
+    compTouchMs = Time::getMillisecondCounterHiRes();
 }
 
-void ScopeView::showOtt()
+void ScopeView::dismissComp()
 {
-    if (! ottOn())
-        return;
-    setView (View::eq);
-    setOttFocus (true);
-}
-
-Rectangle<float> ScopeView::ottChip() const
-{
-    const auto sc = screen();
-    return { sc.getX() + 18.0f, sc.getBottom() - 32.0f, 150.0f, 22.0f };
+    compKind = 0;
+    compHeld = false;
 }
 
 float ScopeView::glueOffset() const
@@ -1009,14 +1021,14 @@ void ScopeView::mouseMove (const MouseEvent& e)
     if (view == View::wave)
     {
         const float d = std::abs (e.position.y - plot().getCentreY());
-        const bool onLine = glueOn() && std::abs (d - glueOffset()) < 7.0f;
+        const bool onLine = glueVisible() && std::abs (d - glueOffset()) < 7.0f;
         setMouseCursor (onLine ? MouseCursor::UpDownResizeCursor : MouseCursor::NormalCursor);
         return;
     }
-    if (ottFocus || view != View::eq)
+    if (ottVisible() || view != View::eq)
     {
         hover = Grab::none;
-        setMouseCursor (ottOn() && ottChip().contains (e.position) ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
+        setMouseCursor (MouseCursor::NormalCursor);
         return;
     }
     if (view != View::eq) { hover = Grab::none; setMouseCursor (MouseCursor::NormalCursor); return; }
@@ -1032,20 +1044,17 @@ void ScopeView::mouseDown (const MouseEvent& e)
     if (view == View::wave)
     {
         const float d = std::abs (e.position.y - plot().getCentreY());
-        if (glueOn() && std::abs (d - glueOffset()) < 7.0f)
+        if (glueVisible() && std::abs (d - glueOffset()) < 7.0f)
         {
             grab = Grab::glue;
+            touchComp (1, true);
             proc.apvts.getParameter (glueThresh)->beginChangeGesture();
         }
         return;
     }
-    if (view == View::eq && ottOn() && ottChip().contains (e.position))
-    {
-        if (ottFocus) selectFilter (postSelected);
-        else setOttFocus (true);
-        return;
-    }
-    if (view != View::eq || ottFocus) return;
+    if (ottVisible()) return;
+    dismissComp();
+    if (view != View::eq) return;
     grab = hitPoint (e.position);
     if (grab == Grab::lc) fp (fLc)->beginChangeGesture();
     if (grab == Grab::hc) fp (fHc)->beginChangeGesture();
@@ -1077,7 +1086,7 @@ void ScopeView::mouseDrag (const MouseEvent& e)
 void ScopeView::mouseUp (const MouseEvent&)
 {
     using namespace ParamIDs;
-    if (grab == Grab::glue) proc.apvts.getParameter (glueThresh)->endChangeGesture();
+    if (grab == Grab::glue) { proc.apvts.getParameter (glueThresh)->endChangeGesture(); touchComp (1, false); }
     if (grab == Grab::lc) fp (fLc)->endChangeGesture();
     if (grab == Grab::hc) fp (fHc)->endChangeGesture();
     if (grab == Grab::pk) { fp (fPkFreq)->endChangeGesture(); fp (fPkGain)->endChangeGesture(); }
@@ -1087,7 +1096,7 @@ void ScopeView::mouseUp (const MouseEvent&)
 void ScopeView::mouseDoubleClick (const MouseEvent& e)
 {
     using namespace ParamIDs;
-    if (ottFocus && view == View::eq) return;
+    if (ottVisible()) return;
     if (view != View::eq)
     {
         ampZoom = 1.0f;
@@ -1109,7 +1118,7 @@ void ScopeView::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w)
     using namespace ParamIDs;
     const float d = std::abs (w.deltaY) >= std::abs (w.deltaX) ? w.deltaY : w.deltaX;
     if (d == 0.0f) return;
-    if (view == View::eq && ottFocus) return;
+    if (ottVisible()) return;
     if (view == View::eq)
     {
         const auto h = hitPoint (e.position);
@@ -1183,6 +1192,14 @@ void ScopeView::paint (Graphics& g)
         if (view == View::wave) paintWave (g, t);
         else if (view == View::spectrum) paintBands (g, t);
         else paintEq (g, t);
+        if (ottVisible())
+        {
+            g.beginTransparencyLayer (compFade);
+            g.setColour (Colour (0xff09090b).withAlpha (0.93f));
+            g.fillRect (s);
+            paintOtt (g, t);
+            g.endTransparencyLayer();
+        }
 
         ColourGradient refl (Colours::white.withAlpha (t.gloss ? 0.18f : 0.08f), 0.0f, s.getY(), Colours::white.withAlpha (0.0f), 0.0f, s.getY() + s.getHeight() * 0.4f, false);
         g.setGradientFill (refl);
@@ -1212,21 +1229,6 @@ void ScopeView::paint (Graphics& g)
     g.setColour (Colour ((uint8) 10, 10, 12, 0.8f));
     g.fillRoundedRectangle (pillsArea().toFloat(), 8.0f);
 
-    // OTT / FILTERS chip while OTT is on
-    if (view == View::eq && ottOn())
-    {
-        const auto chip = ottChip();
-        g.setColour (Colour (0xff0c0c0f).withAlpha (0.9f));
-        g.fillRoundedRectangle (chip, 6.0f);
-        const auto left = chip.withWidth (chip.getWidth() * 0.4f), right = chip.withTrimmedLeft (chip.getWidth() * 0.4f);
-        g.setColour (t.accent.withAlpha (0.85f));
-        g.fillRoundedRectangle ((ottFocus ? left : right).reduced (2.0f), 5.0f);
-        g.setFont (uiFont (11.0f, true, 0.05f));
-        g.setColour (ottFocus ? Colour (0xff141417) : Colour (0xffb4b4bc));
-        g.drawText ("OTT", left, Justification::centred);
-        g.setColour (ottFocus ? Colour (0xffb4b4bc) : Colour (0xff141417));
-        g.drawText ("FILTERS", right, Justification::centred);
-    }
     g.fillRoundedRectangle (viewSwitch.getBounds().toFloat().expanded (6.0f, 5.0f), 8.0f);
 
     // Pitch readout
@@ -1248,10 +1250,10 @@ void ScopeView::paint (Graphics& g)
     {
         g.setColour (Colour ((uint8) 165, 165, 173, 0.45f));
         g.setFont (uiFont (11.0f));
-        const String hint = view == View::wave ? (glueOn() ? "drag the comp line: threshold    wheel: height    shift + wheel: bars"
+        const String hint = ottVisible() ? String ("OTT: bars from below lift the quiet parts, bars from above push the loud parts down")
+                          : view == View::wave ? (glueVisible() ? "drag the comp line: threshold    wheel: height    shift + wheel: bars"
                                                            : "wheel: height    shift + wheel: bars    double-click: reset")
-                          : (ottFocus ? "OTT: bars from below lift the quiet parts, bars from above push the loud parts down"
-                                      : "drag the points    wheel on a point: slope / width    double-click: reset");
+                          : "drag the points    wheel on a point: slope / width    double-click: reset";
         g.drawText (hint, s.withTrimmedRight (20.0f).withTrimmedBottom (8.0f), Justification::bottomRight);
     }
 }
@@ -1394,8 +1396,9 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
     g.strokePath (wave, PathStrokeType (1.3f + intensity * 0.7f, PathStrokeType::curved, PathStrokeType::rounded));
 
     // ---- Glue: threshold lines, the loud parts tinted, gain reduction hanging from the top
-    if (glueOn())
+    if (glueVisible())
     {
+        g.beginTransparencyLayer (compFade);
         const auto cc = t.comp();
         const float off = glueOffset();
         {
@@ -1449,6 +1452,7 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
         g.setColour (cc);
         g.setFont (uiFont (11.0f));
         g.drawText (label, tag, Justification::centred);
+        g.endTransparencyLayer();
     }
 
     // clip lines while Ceiling is touched
@@ -1487,8 +1491,12 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
         g.drawText (label, tag, Justification::centred);
     }
 
-    if (glueOn())
+    if (glueVisible())
+    {
+        g.beginTransparencyLayer (compFade);
         paintGluePanel (g, t);
+        g.endTransparencyLayer();
+    }
 }
 
 void ScopeView::paintBands (Graphics& g, const Theme& t)
@@ -1530,7 +1538,7 @@ void ScopeView::paintEq (Graphics& g, const Theme& t)
     using namespace ParamIDs;
     const auto p = plot();
     const double sr = proc.currentSampleRate.load();
-    const bool showOttBands = ottFocus && ottOn();
+    const bool showOttBands = false;
 
     // ---- Grid
     g.setFont (uiFont (10.0f));

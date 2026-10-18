@@ -358,7 +358,18 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     clipBlock.addAndMakeVisible (*clipMode);
     ceiling.init (clipBlock, apvts, "Ceiling", ParamIDs::ceiling, true);
     for (auto* k : { &ottDepth, &ottTime, &ottUp, &ottDown, &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix })
-        k->slider.onDragStart = [this] { if (compBlock.isOn()) showComp(); };
+    {
+        auto* sl = &k->slider;
+        auto kind = [this, k]
+        {
+            if (k == &compMix) return roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 1 ? 1 : 2;
+            return (k == &glueThresh || k == &glueRatio || k == &glueAttack || k == &glueRelease) ? 1 : 2;
+        };
+        sl->onDragStart = [this, kind] { scope.touchComp (kind(), true); };
+        sl->onDragEnd = [this, kind] { scope.touchComp (kind(), false); };
+        sl->onValueChange = [this, kind, sl] { if (sl->isMouseOverOrDragging()) scope.touchComp (kind(), sl->isMouseButtonDown()); };
+    }
+    content.addMouseListener (this, true);   // grabbing any control outside the compressor sends its picture away
     ceiling.slider.onDragStart = [this] { scope.touchCeiling (true); };
     ceiling.slider.onDragEnd = [this] { scope.touchCeiling (false); };
     ceiling.slider.onValueChange = [this] { if (ceiling.slider.isMouseOverOrDragging()) scope.touchCeiling (ceiling.slider.isMouseButtonDown()); };
@@ -514,10 +525,15 @@ void VoiceFuckerEditor::resized()
 
 void VoiceFuckerEditor::showComp()
 {
-    if (roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 1)
-        scope.setView (ScopeView::View::wave);
-    else
-        scope.showOtt();
+    scope.touchComp (roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 1 ? 1 : 2, false);
+}
+
+void VoiceFuckerEditor::mouseDown (const MouseEvent& e)
+{
+    auto* c = e.eventComponent;
+    if (c == nullptr || ! scope.isCompShown()) return;
+    if (c == &compBlock || compBlock.isParentOf (c) || c == &scope || scope.isParentOf (c)) return;
+    scope.dismissComp();
 }
 
 void VoiceFuckerEditor::timerCallback()

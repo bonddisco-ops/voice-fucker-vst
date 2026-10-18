@@ -70,6 +70,7 @@ public:
     void hideOverlays() { welcome.setVisible (false); tour.setVisible (false); }
     void touchCeiling() { scope.touchCeiling (true); }
     void showComp();
+    void mouseDown (const juce::MouseEvent&) override;
     int lastCompOn = -1, lastCompMode = -1;
 
 private:

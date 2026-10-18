@@ -179,8 +179,11 @@ public:
     View getView() const { return view; }
     void selectFilter (bool post);
     void touchCeiling (bool dragging);
-    void showOtt();                       // EQ screen with the three OTT bands instead of the filters
-    bool isOttShown() const { return ottFocus; }
+    // Compressor pictures (1 Glue on the wave, 2 OTT bands) are shown only while its knobs are set:
+    // 5 s after the last touch, or as soon as any other control is grabbed, the screen goes back
+    void touchComp (int kind, bool held);
+    void dismissComp();
+    bool isCompShown() const { return compKind != 0; }
     void setHelp (bool enabled, Help::Lang);
     void setBarsIndex (int i);
     int getBarsIndex() const { return barsIndex; }
@@ -206,10 +209,10 @@ private:
     void paintEq (juce::Graphics&, const Theme&);
     void paintGluePanel (juce::Graphics&, const Theme&);
     void paintOtt (juce::Graphics&, const Theme&);
-    void setOttFocus (bool);
     bool glueOn() const;
     bool ottOn() const;
-    juce::Rectangle<float> ottChip() const;
+    bool glueVisible() const { return compShownKind == 1 && compFade > 0.001f && glueOn(); }
+    bool ottVisible() const { return compShownKind == 2 && compFade > 0.001f && ottOn(); }
     float glueOffset() const;
     juce::Path bulgedRect (juce::Rectangle<float>) const;
     void updateSpectrum();
@@ -238,7 +241,11 @@ private:
     Help::Lang lang = Help::Lang::en;
 
     float ampZoom = 1.0f;
-    bool ottFocus = false;
+    int compKind = 0, compShownKind = 0;     // wanted now / being drawn (stays while fading out)
+    bool compHeld = false, compSwitchedView = false;
+    double compTouchMs = 0.0;
+    float compFade = 0.0f;
+    View viewBeforeComp = View::wave;
     float glueGrUi = 0.0f, glueInUi = -100.0f, ottGainUi[3] {}, ottLevelUi[3] { -100.0f, -100.0f, -100.0f };
     int barsIndex = 1;
     std::array<float, VoiceFuckerProcessor::maxBands> bandsUi {}, bandsHold {};
