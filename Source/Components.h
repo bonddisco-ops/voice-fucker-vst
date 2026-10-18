@@ -33,6 +33,15 @@ private:
 juce::Font uiFont (float height, bool bold = false, float kerning = 0.0f);
 const Theme& themeOf (const juce::Component&);
 
+// The metal look shared by every control: glass jewel lamps, raised keys, recesses milled into the panel
+namespace Metal
+{
+    void jewel (juce::Graphics&, juce::Point<float> centre, float radius, bool on, juce::Colour colour);
+    void key (juce::Graphics&, juce::Rectangle<float>, bool on, const Theme&, float corner = 6.0f, bool hover = false);
+    void milled (juce::Graphics&, juce::Rectangle<float>, float corner, const Theme&);
+    void screw (juce::Graphics&, juce::Point<float> centre, float angle);
+}
+
 // ---------------------------------------------------------------------------
 class ClickLabel : public juce::Label
 {
