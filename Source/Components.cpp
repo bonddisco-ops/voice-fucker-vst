@@ -737,10 +737,12 @@ String ScopeView::noteText() const
 
 void ScopeView::selectFilter (bool post)
 {
+    setOttFocus (false);
     postSelected = post;
     prePill.selected = ! post;
     postPill.selected = post;
-    updateTopControls();
+    preTarget->setVisible (! post);
+    postTarget->setVisible (post);
     prePill.repaint();
     postPill.repaint();
     repaint();
@@ -799,7 +801,7 @@ void ScopeView::setBarsIndex (int i)
 void ScopeView::timerCallback()
 {
     const double now = Time::getMillisecondCounterHiRes();
-    if (tempWave && ! ceilingDragging && ! compDragging && now - ceilingTouchMs > 2000.0 && now - compTouchMs > 2100.0)
+    if (tempWave && ! ceilingDragging && now - ceilingTouchMs > 2000.0)
     {
         tempWave = false;
         view = viewBeforeCeiling;
@@ -821,57 +823,82 @@ void ScopeView::timerCallback()
 
     // compressor: follow its mode (Glue -> WAVE, OTT -> EQ screen) when it is switched, and animate its meters
     {
-            const float gr = proc.uiGlueGr.exchange (0.0f), in = proc.uiGlueIn.exchange (-100.0f);
-        // calm motion at 60 fps: fast enough to follow, slow enough not to flicker
-        glueGrUi += (gr - glueGrUi) * (gr < glueGrUi ? 0.25f : 0.06f);
-        glueInUi += (jmax (-60.0f, in) - glueInUi) * (in > glueInUi ? 0.2f : 0.06f);
+            const float gr = proc.uiGlueGr.load(), in = proc.uiGlueIn.load();
+        if (ottFocus && ! ottOn()) setOttFocus (false);
+        // compressor meters: fast attack, slower fall, so the movement reads well
+        auto follow = [] (float& shown, float target, float up, float down)
+        { shown += (std::abs (target) > std::abs (shown) ? up : down) * (target - shown); };
+        follow (glueGrUi, gr, 0.6f, 0.15f);
+        glueInUi += 0.4f * (jmax (-100.0f, in) - glueInUi);
         for (int b = 0; b < 3; ++b)
         {
-            const float gv = proc.uiOttGain[(size_t) b].exchange (0.0f), lv = proc.uiOttLevel[(size_t) b].exchange (-100.0f);
-            ottGainUi[b] += (gv - ottGainUi[b]) * 0.05f;
-            ottLevelUi[b] += (jmax (-72.0f, lv) - ottLevelUi[b]) * 0.07f;
+            follow (ottGainUi[b], proc.uiOttGain[(size_t) b].load(), 0.5f, 0.12f);
+            ottLevelUi[b] += 0.35f * (jmax (-100.0f, proc.uiOttLevel[(size_t) b].load()) - ottLevelUi[b]);
         }
-        updateTopControls();
     }
     repaint();
 }
 
-float ScopeView::compAlpha() const
+bool ScopeView::glueOn() const
 {
-    if (compDragging) return 1.0f;
-    const double since = Time::getMillisecondCounterHiRes() - compTouchMs;
-    const float a = (float) jlimit (0.0, 1.0, 1.0 - (since - 1200.0) / 900.0);
-    return a * a * (3.0f - 2.0f * a);   // smooth fade
+    return proc.apvts.getRawParameterValue (ParamIDs::compOn)->load() > 0.5f
+        && roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 1;
 }
 
-bool ScopeView::glueShown() const { return compKind == 1 && view == View::wave && compAlpha() > 0.0f; }
-bool ScopeView::ottShown() const  { return compKind == 2 && compAlpha() > 0.0f; }
-
-void ScopeView::touchComp (int kind, bool dragging)
+bool ScopeView::ottOn() const
 {
-    compKind = kind;
-    compDragging = dragging;
-    compTouchMs = Time::getMillisecondCounterHiRes();
-    if (kind == 1 && view != View::wave)
-    {
-        viewBeforeCeiling = view;
-        tempWave = true;
-        view = View::wave;
-        viewSwitch.view = 0;
-        viewSwitch.repaint();
-    }
+    return proc.apvts.getRawParameterValue (ParamIDs::compOn)->load() > 0.5f
+        && roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 0;
 }
 
-void ScopeView::updateTopControls()
+void ScopeView::setOttFocus (bool f)
 {
-    // while the OTT picture is up the filter controls step aside
-    const float a = ottShown() ? compAlpha() : 0.0f;
-    for (Component* c : { (Component*) &prePill, (Component*) &postPill, (Component*) preTarget.get(), (Component*) postTarget.get() })
-        c->setAlpha (1.0f - a);
-    prePill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
-    postPill.setInterceptsMouseClicks (a < 0.5f, a < 0.5f);
-    preTarget->setVisible (! postSelected);
-    postTarget->setVisible (postSelected);
+    if (ottFocus == f)
+        return;
+    ottFocus = f;
+    prePill.selected = ! f && ! postSelected;
+    postPill.selected = ! f && postSelected;
+    preTarget->setVisible (! f && ! postSelected);
+    postTarget->setVisible (! f && postSelected);
+    prePill.repaint();
+    postPill.repaint();
+    updateTooltip();
+    repaint();
+}
+
+void ScopeView::showOtt()
+{
+    if (! ottOn())
+        return;
+    setView (View::eq);
+    setOttFocus (true);
+}
+
+Rectangle<float> ScopeView::ottChip() const
+{
+    const auto sc = screen();
+    return { sc.getX() + 18.0f, sc.getBottom() - 32.0f, 150.0f, 22.0f };
+}
+
+float ScopeView::glueOffset() const
+{
+    const float lin = Decibels::decibelsToGain (proc.apvts.getRawParameterValue (ParamIDs::glueThresh)->load());
+    return jmin (1.15f, lin * ampZoom) * plot().getHeight() * 0.46f;
+}
+
+Path ScopeView::bulgedRect (Rectangle<float> r) const
+{
+    Path path;
+    const Point<float> c[5] = { r.getTopLeft(), r.getTopRight(), r.getBottomRight(), r.getBottomLeft(), r.getTopLeft() };
+    for (int e = 0; e < 4; ++e)
+        for (int k = 0; k < 8; ++k)
+        {
+            const float a = (float) k / 8.0f;
+            const auto pt = bulge (c[e].x + (c[e + 1].x - c[e].x) * a, c[e].y + (c[e + 1].y - c[e].y) * a);
+            if (e == 0 && k == 0) path.startNewSubPath (pt); else path.lineTo (pt);
+        }
+    path.closeSubPath();
+    return path;
 }
 
 void ScopeView::updateSpectrum()
@@ -979,7 +1006,20 @@ void ScopeView::setParam (RangedAudioParameter* param, float value)
 //------------------------------------------------------------------------------
 void ScopeView::mouseMove (const MouseEvent& e)
 {
-    if (view != View::eq || ottShown()) { hover = Grab::none; setMouseCursor (MouseCursor::NormalCursor); return; }
+    if (view == View::wave)
+    {
+        const float d = std::abs (e.position.y - plot().getCentreY());
+        const bool onLine = glueOn() && std::abs (d - glueOffset()) < 7.0f;
+        setMouseCursor (onLine ? MouseCursor::UpDownResizeCursor : MouseCursor::NormalCursor);
+        return;
+    }
+    if (ottFocus || view != View::eq)
+    {
+        hover = Grab::none;
+        setMouseCursor (ottOn() && ottChip().contains (e.position) ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
+        return;
+    }
+    if (view != View::eq) { hover = Grab::none; setMouseCursor (MouseCursor::NormalCursor); return; }
     const auto h = hitPoint (e.position);
     if (h != hover) { hover = h; repaint(); }
     setMouseCursor (h != Grab::none ? MouseCursor::DraggingHandCursor : MouseCursor::NormalCursor);
@@ -989,7 +1029,23 @@ void ScopeView::mouseDown (const MouseEvent& e)
 {
     using namespace ParamIDs;
     grab = Grab::none;
-    if (view != View::eq || ottShown()) return;
+    if (view == View::wave)
+    {
+        const float d = std::abs (e.position.y - plot().getCentreY());
+        if (glueOn() && std::abs (d - glueOffset()) < 7.0f)
+        {
+            grab = Grab::glue;
+            proc.apvts.getParameter (glueThresh)->beginChangeGesture();
+        }
+        return;
+    }
+    if (view == View::eq && ottOn() && ottChip().contains (e.position))
+    {
+        if (ottFocus) selectFilter (postSelected);
+        else setOttFocus (true);
+        return;
+    }
+    if (view != View::eq || ottFocus) return;
     grab = hitPoint (e.position);
     if (grab == Grab::lc) fp (fLc)->beginChangeGesture();
     if (grab == Grab::hc) fp (fHc)->beginChangeGesture();
@@ -1002,6 +1058,12 @@ void ScopeView::mouseDrag (const MouseEvent& e)
     const auto p = plot();
     switch (grab)
     {
+        case Grab::glue:
+        {
+            const float off = std::abs (e.position.y - p.getCentreY()) / (p.getHeight() * 0.46f) / ampZoom;
+            setParam (proc.apvts.getParameter (glueThresh), jlimit (-40.0f, 0.0f, Decibels::gainToDecibels (off, -40.0f)));
+            break;
+        }
         case Grab::lc: setParam (fp (fLc), e.position.x <= p.getX() + 2.0f ? 20.0f : freqForX (e.position.x)); break;
         case Grab::hc: setParam (fp (fHc), e.position.x >= p.getRight() - 2.0f ? 20000.0f : freqForX (e.position.x)); break;
         case Grab::pk:
@@ -1015,6 +1077,7 @@ void ScopeView::mouseDrag (const MouseEvent& e)
 void ScopeView::mouseUp (const MouseEvent&)
 {
     using namespace ParamIDs;
+    if (grab == Grab::glue) proc.apvts.getParameter (glueThresh)->endChangeGesture();
     if (grab == Grab::lc) fp (fLc)->endChangeGesture();
     if (grab == Grab::hc) fp (fHc)->endChangeGesture();
     if (grab == Grab::pk) { fp (fPkFreq)->endChangeGesture(); fp (fPkGain)->endChangeGesture(); }
@@ -1024,7 +1087,7 @@ void ScopeView::mouseUp (const MouseEvent&)
 void ScopeView::mouseDoubleClick (const MouseEvent& e)
 {
     using namespace ParamIDs;
-    if (ottShown()) return;
+    if (ottFocus && view == View::eq) return;
     if (view != View::eq)
     {
         ampZoom = 1.0f;
@@ -1046,7 +1109,7 @@ void ScopeView::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w)
     using namespace ParamIDs;
     const float d = std::abs (w.deltaY) >= std::abs (w.deltaX) ? w.deltaY : w.deltaX;
     if (d == 0.0f) return;
-    if (view == View::eq && ottShown()) return;
+    if (view == View::eq && ottFocus) return;
     if (view == View::eq)
     {
         const auto h = hitPoint (e.position);
@@ -1120,20 +1183,6 @@ void ScopeView::paint (Graphics& g)
         if (view == View::wave) paintWave (g, t);
         else if (view == View::spectrum) paintBands (g, t);
         else paintEq (g, t);
-        if (glueShown())
-        {
-            g.beginTransparencyLayer (compAlpha());
-            paintGlue (g, t);
-            g.endTransparencyLayer();
-        }
-        if (ottShown())
-        {
-            g.beginTransparencyLayer (compAlpha());
-            g.setColour (Colour (0xf20a0a0d));
-            g.fillRect (s);
-            paintOtt (g, t);
-            g.endTransparencyLayer();
-        }
 
         ColourGradient refl (Colours::white.withAlpha (t.gloss ? 0.18f : 0.08f), 0.0f, s.getY(), Colours::white.withAlpha (0.0f), 0.0f, s.getY() + s.getHeight() * 0.4f, false);
         g.setGradientFill (refl);
@@ -1161,9 +1210,23 @@ void ScopeView::paint (Graphics& g)
 
     // Backings behind the top controls
     g.setColour (Colour ((uint8) 10, 10, 12, 0.8f));
-    g.setColour (Colour ((uint8) 10, 10, 12, 0.8f * (1.0f - (ottShown() ? compAlpha() : 0.0f))));
     g.fillRoundedRectangle (pillsArea().toFloat(), 8.0f);
-    g.setColour (Colour ((uint8) 10, 10, 12, 0.8f));
+
+    // OTT / FILTERS chip while OTT is on
+    if (view == View::eq && ottOn())
+    {
+        const auto chip = ottChip();
+        g.setColour (Colour (0xff0c0c0f).withAlpha (0.9f));
+        g.fillRoundedRectangle (chip, 6.0f);
+        const auto left = chip.withWidth (chip.getWidth() * 0.4f), right = chip.withTrimmedLeft (chip.getWidth() * 0.4f);
+        g.setColour (t.accent.withAlpha (0.85f));
+        g.fillRoundedRectangle ((ottFocus ? left : right).reduced (2.0f), 5.0f);
+        g.setFont (uiFont (11.0f, true, 0.05f));
+        g.setColour (ottFocus ? Colour (0xff141417) : Colour (0xffb4b4bc));
+        g.drawText ("OTT", left, Justification::centred);
+        g.setColour (ottFocus ? Colour (0xffb4b4bc) : Colour (0xff141417));
+        g.drawText ("FILTERS", right, Justification::centred);
+    }
     g.fillRoundedRectangle (viewSwitch.getBounds().toFloat().expanded (6.0f, 5.0f), 8.0f);
 
     // Pitch readout
@@ -1181,12 +1244,14 @@ void ScopeView::paint (Graphics& g)
         g.drawText (noteText(), na.withTrimmedLeft (24.0f), Justification::centredLeft);
     }
 
-    if (view != View::spectrum && ! ottShown())
+    if (view != View::spectrum)
     {
         g.setColour (Colour ((uint8) 165, 165, 173, 0.45f));
         g.setFont (uiFont (11.0f));
-        const String hint = view == View::wave ? "wheel: height    shift + wheel: bars    double-click: reset"
-                                               : "drag the points    wheel on a point: slope / width    double-click: reset";
+        const String hint = view == View::wave ? (glueOn() ? "drag the comp line: threshold    wheel: height    shift + wheel: bars"
+                                                           : "wheel: height    shift + wheel: bars    double-click: reset")
+                          : (ottFocus ? "OTT: bars from below lift the quiet parts, bars from above push the loud parts down"
+                                      : "drag the points    wheel on a point: slope / width    double-click: reset");
         g.drawText (hint, s.withTrimmedRight (20.0f).withTrimmedBottom (8.0f), Justification::bottomRight);
     }
 }
@@ -1207,7 +1272,7 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
     const double gs = jmax (1.0, bpp);
     const double startAbs = (double) count - buckets;
 
-    struct Col { float x, hi, lo, in, pre; };
+    struct Col { float x, hi, lo, in, pre, gr; };
     std::vector<Col> cols;
     cols.reserve ((size_t) (p.getWidth() + 8.0f));
     const int64 gFirst = (int64) std::floor (startAbs / gs) - 1, gLast = (int64) std::floor ((double) (count - 1) / gs);
@@ -1217,7 +1282,7 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
         const int64 b0 = jmax (oldest, (int64) std::ceil ((double) gi * gs));
         const int64 b1 = jmin ((int64) count, (int64) std::ceil ((double) (gi + 1) * gs));
         if (b1 <= b0) continue;
-        Col c { 0.0f, -10.0f, 10.0f, 0.0f, 0.0f };
+        Col c { 0.0f, -10.0f, 10.0f, 0.0f, 0.0f, 0.0f };
         for (int64 b = b0; b < b1; ++b)
         {
             const int idx = (int) (b & (Scope::size - 1));
@@ -1225,6 +1290,7 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
             c.lo = jmin (c.lo, proc.scope.lo[idx]);
             c.in = jmax (c.in, proc.scope.in[idx]);
             c.pre = jmax (c.pre, proc.scope.preClip[idx]);
+            c.gr = jmin (c.gr, proc.scope.gr[idx]);
         }
         c.x = L + (float) (((double) gi * gs + gs * 0.5 - startAbs) / bpp);
         cols.push_back (c);
@@ -1327,6 +1393,64 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
     g.setColour (t.accentHi.withAlpha (0.75f + 0.25f * intensity));
     g.strokePath (wave, PathStrokeType (1.3f + intensity * 0.7f, PathStrokeType::curved, PathStrokeType::rounded));
 
+    // ---- Glue: threshold lines, the loud parts tinted, gain reduction hanging from the top
+    if (glueOn())
+    {
+        const auto cc = t.comp();
+        const float off = glueOffset();
+        {
+            Graphics::ScopedSaveState hi (g);
+            RectangleList<int> region;
+            region.add (p.withBottom (cy - off).toNearestInt());
+            region.add (p.withTop (cy + off).toNearestInt());
+            g.reduceClipRegion (region);
+            g.setColour (cc.withAlpha (0.5f));
+            g.fillPath (wave);
+        }
+        {
+            const float grScale = p.getHeight() * 0.24f / 24.0f;
+            Path gr;
+            gr.startNewSubPath (bulge (cols.front().x, p.getY()));
+            for (const auto& c : cols)
+                gr.lineTo (bulge (c.x, p.getY() + jmin (24.0f, -c.gr) * grScale));
+            gr.lineTo (bulge (cols.back().x, p.getY()));
+            gr.closeSubPath();
+            ColourGradient gg (cc.withAlpha (0.30f), 0.0f, p.getY(), cc.withAlpha (0.05f), 0.0f, p.getY() + 24.0f * grScale, false);
+            g.setGradientFill (gg);
+            g.fillPath (gr);
+            Path edge;
+            bool started = false;
+            for (const auto& c : cols)
+            {
+                const auto pt = bulge (c.x, p.getY() + jmin (24.0f, -c.gr) * grScale);
+                if (! started) { edge.startNewSubPath (pt); started = true; } else edge.lineTo (pt);
+            }
+            g.setColour (cc.withAlpha (0.9f));
+            g.strokePath (edge, PathStrokeType (1.4f));
+        }
+        for (const float y : { cy - off, cy + off })
+        {
+            Path l;
+            for (int k = 0; k <= 16; ++k)
+            {
+                const auto pt = bulge (L - 20.0f + (R - L + 40.0f) * (float) k / 16.0f, y);
+                if (k == 0) l.startNewSubPath (pt); else l.lineTo (pt);
+            }
+            g.setColour (cc.withAlpha (0.9f));
+            g.strokePath (l, PathStrokeType (1.6f));
+        }
+        const String label = "Glue " + String (rawv (ParamIDs::glueThresh), 1) + " dB";
+        const auto pos = bulge (R - 70.0f, cy - off - 14.0f);
+        const Rectangle<float> tag (pos.x - 50.0f, pos.y - 10.0f, 100.0f, 20.0f);
+        g.setColour (Colour (0xff141417).withAlpha (0.9f));
+        g.fillRoundedRectangle (tag, 5.0f);
+        g.setColour (cc.withAlpha (0.6f));
+        g.drawRoundedRectangle (tag, 5.0f, 1.0f);
+        g.setColour (cc);
+        g.setFont (uiFont (11.0f));
+        g.drawText (label, tag, Justification::centred);
+    }
+
     // clip lines while Ceiling is touched
     const double since = Time::getMillisecondCounterHiRes() - ceilingTouchMs;
     const float clipAlpha = ceilingDragging ? 1.0f : (float) jlimit (0.0, 1.0, 1.0 - (since - 1200.0) / 800.0);
@@ -1362,6 +1486,9 @@ void ScopeView::paintWave (Graphics& g, const Theme& t)
         g.setFont (uiFont (11.0f));
         g.drawText (label, tag, Justification::centred);
     }
+
+    if (glueOn())
+        paintGluePanel (g, t);
 }
 
 void ScopeView::paintBands (Graphics& g, const Theme& t)
@@ -1403,6 +1530,7 @@ void ScopeView::paintEq (Graphics& g, const Theme& t)
     using namespace ParamIDs;
     const auto p = plot();
     const double sr = proc.currentSampleRate.load();
+    const bool showOttBands = ottFocus && ottOn();
 
     // ---- Grid
     g.setFont (uiFont (10.0f));
@@ -1421,6 +1549,8 @@ void ScopeView::paintEq (Graphics& g, const Theme& t)
     }
     for (const float db : { 18.0f, 12.0f, 6.0f, 0.0f, -6.0f, -12.0f, -18.0f })
     {
+        if (showOttBands)
+            break;
         const float y = yForDb (db);
         Path l;
         for (int k = 0; k <= 12; ++k)
@@ -1469,9 +1599,15 @@ void ScopeView::paintEq (Graphics& g, const Theme& t)
         }
         spec.lineTo (bulge (p.getRight(), bottom));
         spec.closeSubPath();
-        ColourGradient sg (Colours::white.withAlpha (0.22f), 0.0f, p.getY(), Colours::white.withAlpha (0.03f), 0.0f, bottom, false);
+        ColourGradient sg (Colours::white.withAlpha (showOttBands ? 0.12f : 0.22f), 0.0f, p.getY(), Colours::white.withAlpha (0.03f), 0.0f, bottom, false);
         g.setGradientFill (sg);
         g.fillPath (spec);
+    }
+
+    if (showOttBands)
+    {
+        paintOtt (g, t);
+        return;
     }
 
     // ---- Filter curves: the other filter faint, the selected one bright
@@ -1991,144 +2127,186 @@ void WelcomePrompt::paint (Graphics& g)
     g.drawText (Help::ui ("Help language", "Язык подсказок", lang), Rectangle<float> (c.getX() + 24.0f, c.getY() + 128.0f, 140.0f, 28.0f), Justification::centredLeft);
 }
 
+
 //------------------------------------------------------------------------------
-void ScopeView::paintGlue (Graphics& g, const Theme& t)
+// A small graph in the corner: how Glue squeezes (input level -> output level), and how much right now
+void ScopeView::paintGluePanel (Graphics& g, const Theme& t)
 {
     auto rawv = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
-    const auto p = plot();
     const auto cc = t.comp();
-    const float thr = rawv (ParamIDs::glueThresh);
-    const float ratio = Tables::glueRatioValues[jlimit (0, 2, roundToInt (rawv (ParamIDs::glueRatio)))];
-    const float cy = p.getCentreY(), A = amp();
-    const float press = jlimit (0.0f, 1.0f, -glueGrUi / 12.0f);   // how hard it squeezes right now
-
-    // threshold lines over the wave, everything beyond them glows as hard as it is squeezed
-    const float off = jmin (1.2f, Decibels::decibelsToGain (thr) * ampZoom) * p.getHeight() * 0.46f;
-    const float W = p.getWidth() - 150.0f;   // the right part holds the meter
-    {
-        Graphics::ScopedSaveState st (g);
-        g.reduceClipRegion (Rectangle<float> (p.getX(), p.getY() - 30.0f, W, cy - off - p.getY() + 30.0f).toNearestInt());
-        g.setColour (cc.withAlpha (0.03f + 0.16f * press));
-        g.fillRect (Rectangle<float> (p.getX(), p.getY() - 30.0f, W, cy - off - p.getY() + 30.0f));
-    }
-    g.setColour (cc.withAlpha (0.03f + 0.16f * press));
-    g.fillRect (Rectangle<float> (p.getX(), cy + off, W, p.getBottom() + 30.0f - cy - off));
-    for (const float y : { cy - off, cy + off })
-    {
-        Path l;
-        for (int k = 0; k <= 16; ++k)
-        {
-            const auto pt = bulge (p.getX() + W * (float) k / 16.0f, y);
-            if (k == 0) l.startNewSubPath (pt); else l.lineTo (pt);
-        }
-        Path dashed;
-        const float dash[] = { 7.0f, 5.0f };
-        PathStrokeType (1.6f).createDashedStroke (dashed, l, dash, 2);
-        g.setColour (cc.withAlpha (0.9f));
-        g.fillPath (dashed);
-    }
-    ignoreUnused (A);
-
-    // side panel: transfer curve and gain reduction meter
-    const Rectangle<float> panel (p.getRight() - 140.0f, p.getY() - 4.0f, 140.0f, p.getHeight() + 8.0f);
-    g.setColour (Colour ((uint8) 8, 8, 10, 0.82f));
+    const auto p = plot();
+    const float side = jlimit (70.0f, 150.0f, p.getHeight() * 0.52f);
+    const Rectangle<float> panel (p.getX() + 6.0f, p.getY() + 6.0f, side + 64.0f, side + 46.0f);
+    g.setColour (Colour (0xff0c0c0f).withAlpha (0.88f));
     g.fillRoundedRectangle (panel, 8.0f);
     g.setColour (cc.withAlpha (0.35f));
     g.drawRoundedRectangle (panel, 8.0f, 1.0f);
 
-    const float side = jmin (panel.getHeight() - 34.0f, 84.0f);
-    const Rectangle<float> curve (panel.getX() + 10.0f, panel.getY() + 22.0f, side, side);
-    auto xFor = [&] (float db) { return curve.getX() + (db + 48.0f) / 48.0f * curve.getWidth(); };
-    auto yFor = [&] (float db) { return curve.getBottom() - (db + 48.0f) / 48.0f * curve.getHeight(); };
-    g.setColour (Colours::white.withAlpha (0.08f));
-    g.drawRect (curve, 1.0f);
-    g.drawLine (curve.getX(), curve.getBottom(), curve.getRight(), curve.getY(), 1.0f);
-    Path tc;
-    for (int k = 0; k <= 48; ++k)
-    {
-        const float in = -48.0f + (float) k;
-        const float outDb = in <= thr ? in : thr + (in - thr) / ratio;
-        if (k == 0) tc.startNewSubPath (xFor (in), yFor (outDb)); else tc.lineTo (xFor (in), yFor (outDb));
-    }
+    const float thr = rawv (ParamIDs::glueThresh);
+    const float ratio = Tables::glueRatioValues[jlimit (0, 2, roundToInt (rawv (ParamIDs::glueRatio)))];
     g.setColour (cc);
-    g.strokePath (tc, PathStrokeType (2.0f));
-    if (glueInUi > -48.0f)
-    {
-        const float in = jmin (0.0f, glueInUi);
-        const float outDb = in <= thr ? in : thr + (in - thr) / ratio;
-        g.setColour (Colours::white);
-        g.fillEllipse (xFor (in) - 3.5f, yFor (outDb) - 3.5f, 7.0f, 7.0f);
-    }
-    g.setColour (Colour ((uint8) 200, 200, 210, 0.75f));
-    g.setFont (uiFont (10.0f, true));
-    g.drawText ("GLUE", panel.withHeight (20.0f).withTrimmedLeft (10.0f), Justification::centredLeft);
-    g.setFont (uiFont (10.0f));
-    g.drawText (String (thr, 0) + " dB  " + Tables::glueRatios[jlimit (0, 2, roundToInt (rawv (ParamIDs::glueRatio)))],
-                Rectangle<float> (panel.getX() + 6.0f, curve.getBottom() + 2.0f, side + 8.0f, 14.0f), Justification::centred);
+    g.setFont (uiFont (11.0f, true, 0.1f));
+    g.drawText ("GLUE  " + Tables::glueRatios[jlimit (0, 2, roundToInt (rawv (ParamIDs::glueRatio)))],
+                panel.withHeight (22.0f).withTrimmedLeft (10.0f), Justification::centredLeft);
 
-    // gain reduction bar, grows down from the top
-    const Rectangle<float> meter (curve.getRight() + 14.0f, curve.getY(), 16.0f, panel.getBottom() - 24.0f - curve.getY());
-    g.setColour (Colours::white.withAlpha (0.07f));
+    // Graph: -48 .. 0 dB on both axes
+    const Rectangle<float> gr (panel.getX() + 10.0f, panel.getY() + 24.0f, side, side);
+    constexpr float lo = -48.0f;
+    auto gx = [&] (float db) { return gr.getX() + (jlimit (lo, 0.0f, db) - lo) / -lo * gr.getWidth(); };
+    auto gy = [&] (float db) { return gr.getBottom() - (jlimit (lo, 0.0f, db) - lo) / -lo * gr.getHeight(); };
+    g.setColour (Colours::white.withAlpha (0.05f));
+    g.fillRect (gr);
+    g.setColour (Colours::white.withAlpha (0.08f));
+    for (float d = -12.0f; d > lo; d -= 12.0f)
+    {
+        g.drawHorizontalLine ((int) gy (d), gr.getX(), gr.getRight());
+        g.drawVerticalLine ((int) gx (d), gr.getY(), gr.getBottom());
+    }
+    g.setColour (Colours::white.withAlpha (0.18f));
+    g.drawLine (gx (lo), gy (lo), gx (0.0f), gy (0.0f), 1.0f);
+    auto curve = [&] (float in)
+    {
+        constexpr float knee = 6.0f;
+        const float over = in - thr, slope = 1.0f / ratio - 1.0f;
+        float grDb = 0.0f;
+        if (over >= knee * 0.5f)       grDb = over * slope;
+        else if (over > -knee * 0.5f)  grDb = (over + knee * 0.5f) * (over + knee * 0.5f) / (2.0f * knee) * slope;
+        return in + grDb;
+    };
+    Path c;
+    for (float in = lo; in <= 0.01f; in += 0.5f)
+    {
+        const Point<float> pt (gx (in), gy (curve (in)));
+        if (in == lo) c.startNewSubPath (pt); else c.lineTo (pt);
+    }
+    g.setColour (cc);
+    g.strokePath (c, PathStrokeType (2.0f, PathStrokeType::curved, PathStrokeType::rounded));
+    const float dashes[] = { 3.0f, 3.0f };
+    Path tl;
+    tl.startNewSubPath (gx (thr), gr.getBottom());
+    tl.lineTo (gx (thr), gy (curve (thr)));
+    Path dashed;
+    PathStrokeType (1.0f).createDashedStroke (dashed, tl, dashes, 2);
+    g.setColour (cc.withAlpha (0.5f));
+    g.fillPath (dashed);
+
+    // The live dot: where the signal is now
+    if (glueInUi > lo)
+    {
+        const Point<float> dot (gx (glueInUi), gy (glueInUi + glueGrUi));
+        g.setColour (cc.withAlpha (0.3f));
+        g.fillEllipse (dot.x - 7.0f, dot.y - 7.0f, 14.0f, 14.0f);
+        g.setColour (Colours::white);
+        g.fillEllipse (dot.x - 3.5f, dot.y - 3.5f, 7.0f, 7.0f);
+    }
+
+    // Gain reduction meter
+    const Rectangle<float> meter (gr.getRight() + 14.0f, gr.getY(), 12.0f, gr.getHeight());
+    g.setColour (Colours::white.withAlpha (0.06f));
     g.fillRoundedRectangle (meter, 3.0f);
-    const float h = jlimit (0.0f, 1.0f, -glueGrUi / 18.0f) * meter.getHeight();
+    const float amount = jlimit (0.0f, 1.0f, -glueGrUi / 24.0f);
     g.setColour (cc);
-    g.fillRoundedRectangle (meter.withHeight (h), 3.0f);
-    g.setColour (Colour ((uint8) 200, 200, 210, 0.75f));
-    g.drawText ("GR", meter.withY (panel.getY() + 2.0f).withHeight (18.0f).expanded (6.0f, 0.0f), Justification::centred);
+    g.fillRoundedRectangle (meter.withHeight (meter.getHeight() * amount), 3.0f);
+    g.setColour (Colour ((uint8) 200, 200, 210, 0.6f));
+    g.setFont (uiFont (9.0f));
+    g.drawText ("GR", meter.withY (meter.getY() - 14.0f).withHeight (12.0f).expanded (8.0f, 0.0f), Justification::centred);
     g.setColour (cc);
-    g.drawText (String (glueGrUi, 1), Rectangle<float> (meter.getX() - 14.0f, meter.getBottom() + 2.0f, 44.0f, 14.0f), Justification::centred);
+    g.setFont (uiFont (11.0f, true));
+    g.drawText (String (glueGrUi, 1), Rectangle<float> (meter.getCentreX() - 22.0f, meter.getBottom() + 2.0f, 44.0f, 14.0f), Justification::centred);
 }
 
+// Three OTT bands: bars from the bottom = how much the quiet parts are lifted,
+// bars from the top = how much the loud parts are pushed down; the thin strip is the band level
 void ScopeView::paintOtt (Graphics& g, const Theme& t)
 {
-    auto rawv = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
     const auto p = plot();
     const auto cc = t.comp();
-    const float up = rawv (ParamIDs::ottUp) * 0.01f, down = rawv (ParamIDs::ottDown) * 0.01f, depth = rawv (ParamIDs::ottDepth) * 0.01f;
+    const float edges[4] = { 20.0f, 250.0f, 2500.0f, 20000.0f };
     const char* names[3] = { "LOW", "MID", "HIGH" };
-    const float colW = p.getWidth() / 3.0f;
-    const float top = p.getY() + 22.0f, bottom = p.getBottom() - 4.0f;
-    auto yFor = [&] (float db) { return bottom - jlimit (0.0f, 1.0f, (db + 66.0f) / 66.0f) * (bottom - top); };
+    const float half = p.getHeight() * 0.5f;
+    constexpr float range = 24.0f;    // dB shown by a half-height bar
+    constexpr float levelLo = -72.0f;
 
     for (int b = 0; b < 3; ++b)
     {
-        const float x0 = p.getX() + colW * (float) b + 30.0f, w = colW - 60.0f, xc = x0 + w * 0.5f;
-        g.setColour (Colour ((uint8) 220, 220, 228, 0.8f));
-        g.setFont (uiFont (12.0f, true, 0.1f));
-        g.drawText (names[b], Rectangle<float> (x0, p.getY() - 2.0f, w, 18.0f), Justification::centred);
+        const float x0 = xForFreq (edges[b]) + (b == 0 ? 0.0f : 5.0f);
+        const float x1 = xForFreq (edges[b + 1]) - (b == 2 ? 0.0f : 5.0f);
+        const Rectangle<float> col (x0, p.getY(), x1 - x0, p.getHeight());
+        const auto colPath = bulgedRect (col);
+        g.setColour (Colours::white.withAlpha (0.035f));
+        g.fillPath (colPath);
+        g.setColour (Colours::white.withAlpha (0.10f));
+        g.strokePath (colPath, PathStrokeType (1.0f));
 
-        // the two thresholds: above the upper line it pushes down, below the lower line it pulls up
-        const float dY = yFor (-18.0f), uY = yFor (-30.0f);
-        g.setColour (cc.withAlpha (0.10f + 0.25f * down));
-        g.drawHorizontalLine (roundToInt (dY), x0, x0 + w);
-        g.setColour (cc.withAlpha (0.10f + 0.25f * up));
-        g.drawHorizontalLine (roundToInt (uY), x0, x0 + w);
-        g.setColour (Colours::white.withAlpha (0.05f));
-        g.drawVerticalLine (roundToInt (xc), top, bottom);
-
-        // level coming in (thin line) and where OTT takes it (bright line), the gap between them is what it does
-        const float inDb = ottLevelUi[b], gv = ottGainUi[b];
-        const float yIn = yFor (inDb), yOut = yFor (inDb + gv);
-        const float lw = w * 0.56f;
-        g.setColour (cc.withAlpha (0.16f));
-        g.fillRect (Rectangle<float> (xc - lw * 0.5f, jmin (yIn, yOut), lw, std::abs (yOut - yIn)));
-        g.setColour (Colours::white.withAlpha (0.45f));
-        g.fillRect (Rectangle<float> (xc - lw * 0.5f, yIn - 0.75f, lw, 1.5f));
-        g.setColour (cc);
-        g.fillRect (Rectangle<float> (xc - lw * 0.5f, yOut - 1.0f, lw, 2.0f));
-        if (std::abs (yOut - yIn) > 8.0f)
+        const float gainDb = ottGainUi[b];
+        const float bw = col.getWidth() * 0.62f;
+        const float bx = col.getCentreX() - bw * 0.5f;
+        // Up: from the bottom
+        if (gainDb > 0.05f)
         {
-            Path arrow;
-            const float dir = yOut < yIn ? -1.0f : 1.0f;
-            arrow.addTriangle (xc, yOut, xc - 5.0f, yOut - dir * 7.0f, xc + 5.0f, yOut - dir * 7.0f);
-            g.fillPath (arrow);
+            const float h = jmin (1.0f, gainDb / range) * half;
+            const Rectangle<float> bar (bx, col.getBottom() - h, bw, h);
+            ColourGradient ug (t.accentHi.withAlpha (0.85f), 0.0f, bar.getY(), t.accentDim.withAlpha (0.35f), 0.0f, col.getBottom(), false);
+            g.setGradientFill (ug);
+            g.fillPath (bulgedRect (bar));
+            g.setColour (t.accentHi);
+            g.strokePath (bulgedRect (bar.withHeight (2.0f)), PathStrokeType (1.0f));
         }
-        g.setFont (uiFont (11.0f, true));
-        g.drawText ((gv >= 0.05f ? "+" : "") + String (gv, 1) + " dB", Rectangle<float> (xc + lw * 0.5f + 4.0f, yOut - 8.0f, 60.0f, 16.0f), Justification::centredLeft);
+        // Down: from the top
+        if (gainDb < -0.05f)
+        {
+            const float h = jmin (1.0f, -gainDb / range) * half;
+            const Rectangle<float> bar (bx, col.getY(), bw, h);
+            ColourGradient dg (cc.withAlpha (0.35f), 0.0f, col.getY(), cc.withAlpha (0.85f), 0.0f, bar.getBottom(), false);
+            g.setGradientFill (dg);
+            g.fillPath (bulgedRect (bar));
+            g.setColour (cc);
+            g.strokePath (bulgedRect (bar.withTrimmedTop (h - 2.0f)), PathStrokeType (1.0f));
+        }
+
+        // Band level strip with the two thresholds of OTT (up -30 dB, down -18 dB)
+        const Rectangle<float> strip (col.getRight() - 16.0f, col.getY() + 8.0f, 6.0f, col.getHeight() - 16.0f);
+        auto ly = [&] (float db) { return strip.getBottom() - (jlimit (levelLo, 0.0f, db) - levelLo) / -levelLo * strip.getHeight(); };
+        g.setColour (Colours::white.withAlpha (0.07f));
+        g.fillPath (bulgedRect (strip));
+        if (ottLevelUi[b] > levelLo)
+        {
+            g.setColour (Colours::white.withAlpha (0.55f));
+            g.fillPath (bulgedRect (strip.withTop (ly (ottLevelUi[b]))));
+        }
+        g.setColour (t.accentHi);
+        g.strokePath (bulgedRect ({ strip.getX() - 4.0f, ly (-30.0f) - 1.0f, strip.getWidth() + 8.0f, 2.0f }), PathStrokeType (1.0f));
+        g.setColour (cc);
+        g.strokePath (bulgedRect ({ strip.getX() - 4.0f, ly (-18.0f) - 1.0f, strip.getWidth() + 8.0f, 2.0f }), PathStrokeType (1.0f));
+
+        // Numbers and names
+        g.setFont (uiFont (12.0f, true));
+        if (gainDb > 0.1f)
+        {
+            g.setColour (t.accentHi);
+            const auto pos = bulge (col.getCentreX(), col.getBottom() - jmin (1.0f, gainDb / range) * half - 12.0f);
+            g.drawText ("+" + String (gainDb, 1), Rectangle<float> (pos.x - 30.0f, pos.y - 8.0f, 60.0f, 16.0f), Justification::centred);
+        }
+        if (gainDb < -0.1f)
+        {
+            g.setColour (cc);
+            const auto pos = bulge (col.getCentreX(), col.getY() + jmin (1.0f, -gainDb / range) * half + 12.0f);
+            g.drawText (String (gainDb, 1), Rectangle<float> (pos.x - 30.0f, pos.y - 8.0f, 60.0f, 16.0f), Justification::centred);
+        }
+        g.setColour (Colour ((uint8) 220, 220, 228, 0.75f));
+        g.setFont (uiFont (12.0f, true, 0.15f));
+        const auto np = bulge (col.getCentreX(), p.getCentreY());
+        g.drawText (names[b], Rectangle<float> (np.x - 40.0f, np.y - 9.0f, 80.0f, 18.0f), Justification::centred);
     }
-    g.setColour (Colour ((uint8) 200, 200, 210, 0.6f));
-    g.setFont (uiFont (11.0f, true));
-    g.drawText ("OTT   depth " + String (roundToInt (depth * 100.0f)) + " %   up " + String (roundToInt (up * 100.0f))
-                    + " %   down " + String (roundToInt (down * 100.0f)) + " %",
-                screen().withTrimmedLeft (22.0f).withTrimmedBottom (8.0f), Justification::bottomLeft);
+
+    // Centre line and a little legend
+    Path mid;
+    for (int k = 0; k <= 12; ++k)
+    {
+        const auto pt = bulge (p.getX() + p.getWidth() * (float) k / 12.0f, p.getCentreY());
+        if (k == 0) mid.startNewSubPath (pt); else mid.lineTo (pt);
+    }
+    g.setColour (Colours::white.withAlpha (0.06f));
+    g.strokePath (mid, PathStrokeType (1.0f));
 }
+

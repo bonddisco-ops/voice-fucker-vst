@@ -179,7 +179,8 @@ public:
     View getView() const { return view; }
     void selectFilter (bool post);
     void touchCeiling (bool dragging);
-    void touchComp (int kind, bool dragging);   // 1 Glue, 2 OTT: shown while its knobs are turned, then fades
+    void showOtt();                       // EQ screen with the three OTT bands instead of the filters
+    bool isOttShown() const { return ottFocus; }
     void setHelp (bool enabled, Help::Lang);
     void setBarsIndex (int i);
     int getBarsIndex() const { return barsIndex; }
@@ -194,7 +195,7 @@ public:
     static constexpr float barValues[6] = { 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
 
 private:
-    enum class Grab { none, lc, pk, hc };
+    enum class Grab { none, glue, lc, pk, hc };
 
     void timerCallback() override;
     juce::Rectangle<float> screen() const;
@@ -203,11 +204,14 @@ private:
     void paintWave (juce::Graphics&, const Theme&);
     void paintBands (juce::Graphics&, const Theme&);
     void paintEq (juce::Graphics&, const Theme&);
-    void paintGlue (juce::Graphics&, const Theme&);   // threshold, ratio and gain reduction over the wave
-    void paintOtt (juce::Graphics&, const Theme&);    // three OTT bands instead of the EQ
-    bool glueShown() const;
-    bool ottShown() const;
-    void updateTopControls();
+    void paintGluePanel (juce::Graphics&, const Theme&);
+    void paintOtt (juce::Graphics&, const Theme&);
+    void setOttFocus (bool);
+    bool glueOn() const;
+    bool ottOn() const;
+    juce::Rectangle<float> ottChip() const;
+    float glueOffset() const;
+    juce::Path bulgedRect (juce::Rectangle<float>) const;
     void updateSpectrum();
     void updateTooltip();
     juce::String noteText() const;
@@ -234,10 +238,7 @@ private:
     Help::Lang lang = Help::Lang::en;
 
     float ampZoom = 1.0f;
-    int compKind = 0;
-    bool compDragging = false;
-    double compTouchMs = -1.0e9;
-    float compAlpha() const;
+    bool ottFocus = false;
     float glueGrUi = 0.0f, glueInUi = -100.0f, ottGainUi[3] {}, ottLevelUi[3] { -100.0f, -100.0f, -100.0f };
     int barsIndex = 1;
     std::array<float, VoiceFuckerProcessor::maxBands> bandsUi {}, bandsHold {};

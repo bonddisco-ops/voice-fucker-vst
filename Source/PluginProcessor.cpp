@@ -946,9 +946,11 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         spectrum.in[specPos] = 0.5f * (eL + eR);
         spectrum.out[specPos] = 0.5f * (wL + wR);
         specPos = (specPos + 1) & (Spectrum::size - 1);
-        if (bucketPos == 0) { bucketHi = bucketLo = monoOut; bucketIn = std::abs (monoIn); bucketPre = preClip * gOut; }
+        const float grNow = (compModeV == 1 && *pCompOn > 0.5f) ? glue.grDb : 0.f;
+        if (bucketPos == 0) { bucketHi = bucketLo = monoOut; bucketIn = std::abs (monoIn); bucketPre = preClip * gOut; bucketGr = grNow; }
         else
         {
+            bucketGr = std::min (bucketGr, grNow);
             bucketHi = std::max (bucketHi, monoOut); bucketLo = std::min (bucketLo, monoOut);
             bucketIn = std::max (bucketIn, std::abs (monoIn)); bucketPre = std::max (bucketPre, preClip * gOut);
         }
@@ -956,7 +958,7 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         {
             const int count = scope.writeCount.load (std::memory_order_relaxed);
             const int idx = count & (Scope::size - 1);
-            scope.hi[idx] = bucketHi; scope.lo[idx] = bucketLo; scope.in[idx] = bucketIn; scope.preClip[idx] = bucketPre;
+            scope.hi[idx] = bucketHi; scope.lo[idx] = bucketLo; scope.in[idx] = bucketIn; scope.preClip[idx] = bucketPre; scope.gr[idx] = bucketGr;
             scope.writeCount.store (count + 1, std::memory_order_release);
             bucketPos = 0;
         }
@@ -978,12 +980,17 @@ void VoiceFuckerProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&
         if (note >= 0) lowest = std::min (lowest, note);
     }
     uiAutoHz = detectedHz;
-    uiGlueGr = std::min (uiGlueGr.load(), glueGrMin);
-    uiGlueIn = std::max (uiGlueIn.load(), glueInMax);
-    for (int b = 0; b < 3; ++b)
     {
-        if (std::abs (ottG[b]) > std::abs (uiOttGain[(size_t) b].load())) uiOttGain[(size_t) b] = ottG[b];
-        uiOttLevel[(size_t) b] = std::max (uiOttLevel[(size_t) b].load(), ottLvl[b]);
+        const bool active = *pCompOn > 0.5f, isGlue = active && compModeV == 1, isOtt = active && compModeV == 0;
+        uiGlueGr = isGlue ? glue.grDb : 0.f;
+        uiGlueIn = isGlue ? cdsp::gainToDb (glue.env) : -100.f;
+        const float depthNow = *pOttDepth * 0.01f;
+        for (int b = 0; b < 3; ++b)
+        {
+            uiOttGain[(size_t) b] = isOtt ? 0.5f * (ott.gdb[0][b] + ott.gdb[1][b]) * depthNow : 0.f;
+            uiOttLevel[(size_t) b] = isOtt ? cdsp::gainToDb (std::max (ott.env[0][b], ott.env[1][b])) : -100.f;
+        }
+        ignoreUnused (glueGrMin, glueInMax, ottG, ottLvl);
     }
     ignoreUnused (lowest);
     for (int j = 0; j < Tables::numIntervals; ++j)

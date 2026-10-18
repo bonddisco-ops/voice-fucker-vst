@@ -69,7 +69,8 @@ public:
     void showWelcome() { welcome.setVisible (true); welcome.toFront (false); }
     void hideOverlays() { welcome.setVisible (false); tour.setVisible (false); }
     void touchCeiling() { scope.touchCeiling (true); }
-    void touchComp (int kind) { scope.touchComp (kind, true); }
+    void showComp();
+    int lastCompOn = -1, lastCompMode = -1;
 
 private:
     class Content : public juce::Component

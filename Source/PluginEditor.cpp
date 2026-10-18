@@ -357,14 +357,8 @@ VoiceFuckerEditor::VoiceFuckerEditor (VoiceFuckerProcessor& p)
     clipMode = std::make_unique<Segmented> (*apvts.getParameter (ParamIDs::clipMode), Tables::clipModes, true);
     clipBlock.addAndMakeVisible (*clipMode);
     ceiling.init (clipBlock, apvts, "Ceiling", ParamIDs::ceiling, true);
-    for (auto* k : { &glueThresh, &glueRatio, &glueAttack, &glueRelease, &ottDepth, &ottTime, &ottUp, &ottDown })
-    {
-        const int kind = (k == &ottDepth || k == &ottTime || k == &ottUp || k == &ottDown) ? 2 : 1;
-        auto* sl = &k->slider;
-        sl->onDragStart = [this, kind] { scope.touchComp (kind, true); };
-        sl->onDragEnd = [this, kind] { scope.touchComp (kind, false); };
-        sl->onValueChange = [this, kind, sl] { if (sl->isMouseOverOrDragging()) scope.touchComp (kind, sl->isMouseButtonDown()); };
-    }
+    for (auto* k : { &ottDepth, &ottTime, &ottUp, &ottDown, &glueThresh, &glueRatio, &glueAttack, &glueRelease, &compMix })
+        k->slider.onDragStart = [this] { if (compBlock.isOn()) showComp(); };
     ceiling.slider.onDragStart = [this] { scope.touchCeiling (true); };
     ceiling.slider.onDragEnd = [this] { scope.touchCeiling (false); };
     ceiling.slider.onValueChange = [this] { if (ceiling.slider.isMouseOverOrDragging()) scope.touchCeiling (ceiling.slider.isMouseButtonDown()); };
@@ -518,10 +512,27 @@ void VoiceFuckerEditor::resized()
     ceiling.setBounds ((clipW - 58) / 2, ky, 58);
 }
 
+void VoiceFuckerEditor::showComp()
+{
+    if (roundToInt (proc.apvts.getRawParameterValue (ParamIDs::compMode)->load()) == 1)
+        scope.setView (ScopeView::View::wave);
+    else
+        scope.showOtt();
+}
+
 void VoiceFuckerEditor::timerCallback()
 {
     using namespace ParamIDs;
     auto raw = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+
+    // Comp switched on or to another mode: Glue is set up on the waveform, OTT on its band view
+    {
+        const int cOn = raw (compOn) > 0.5f ? 1 : 0, cMode = roundToInt (raw (compMode));
+        if (lastCompOn >= 0 && cOn == 1 && (cOn != lastCompOn || cMode != lastCompMode))
+            showComp();
+        lastCompOn = cOn;
+        lastCompMode = cMode;
+    }
     inCol.push (proc.inPeak[0].exchange (0.0f), proc.inPeak[1].exchange (0.0f));
     outCol.push (proc.outPeak[0].exchange (0.0f), proc.outPeak[1].exchange (0.0f));
 

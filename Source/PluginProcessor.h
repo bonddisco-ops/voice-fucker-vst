@@ -54,6 +54,7 @@ public:
     {
         static constexpr int size = 65536;            // 1 ms buckets
         float hi[size] {}, lo[size] {}, in[size] {}, preClip[size] {};
+        float gr[size] {};                            // Glue gain reduction in dB (0 or below)
         std::atomic<int> writeCount { 0 };
         std::atomic<int> beatCount { 0 };
         std::atomic<double> beatAt { 0.0 };
@@ -166,7 +167,7 @@ private:
 
     // scope decimation and beat clock
     int bucketLen = 48, bucketPos = 0;
-    float bucketHi = 0, bucketLo = 0, bucketIn = 0, bucketPre = 0;
+    float bucketHi = 0, bucketLo = 0, bucketIn = 0, bucketPre = 0, bucketGr = 0;
     double beatClock = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoiceFuckerProcessor)
